@@ -1,0 +1,20 @@
+{
+  "updated": "2026-11-01 18:08:43",
+  "sources": [
+    {
+      "name": "主EPG",
+      "file": "epg.xml",
+      "size_kb": 801.6
+    },
+    {
+      "name": "备用1",
+      "file": "epg_fanmingming.xml",
+      "size_kb": 7370.4
+    },
+    {
+      "name": "备用2",
+      "file": "epg_112114.xml",
+      "size_kb": 2039.3
+    }
+  ]
+}
