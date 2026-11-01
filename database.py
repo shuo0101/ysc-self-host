@@ -23,7 +23,13 @@ def init_db():
 def _upd(t, url, st, **kw):
     c = sqlite3.connect(DB)
     row = c.execute(f"SELECT success_count,fail_count,consecutive_fails FROM {t} WHERE url=?",(url,)).fetchone()
-    sc,fc,cf = (row[0]+(1 if st=='ok' else 0), row[1]+(0 if st=='ok' else 1), 0 if st=='ok' else (row[2]+1 if row else 1))
+    # 修复：row 为 None 时（新记录）给默认值
+    if row is None:
+        sc, fc, cf = (1 if st=='ok' else 0, 0 if st=='ok' else 1, 0 if st=='ok' else 1)
+    else:
+        sc = row[0] + (1 if st=='ok' else 0)
+        fc = row[1] + (0 if st=='ok' else 1)
+        cf = 0 if st=='ok' else (row[2] + 1)
     en = 0 if cf >= 5 else 1
     cols = ['url','last_status','success_count','fail_count','consecutive_fails','last_checked','enabled'] + list(kw.keys())
     vals = [url,st,sc,fc,cf,datetime.now().isoformat(),en] + list(kw.values())
