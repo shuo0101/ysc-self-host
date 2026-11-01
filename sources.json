@@ -1,0 +1,23 @@
+{
+  "_说明": "编辑本文件即可管理所有源。base_url 填你自己仓库的 raw 地址(国内加速后), 用于回写进 lives 字段",
+  "base_url": "https://gh-proxy.com/https://raw.githubusercontent.com/你的用户名/tvbox-self-host/main",
+
+  "spider": "",
+
+  "vod_sources": [
+    {
+      "name": "示例点播源1",
+      "url": "https://gh-proxy.com/https://raw.githubusercontent.com/xxx/xxx/main/tvbox.json"
+    },
+    {
+      "name": "示例点播源2",
+      "url": "https://gh-proxy.com/https://raw.githubusercontent.com/yyy/yyy/main/tvbox.json"
+    }
+  ],
+
+  "live_sources": [
+    "https://live.zbds.top/tv/iptv6.m3u",
+    "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u",
+    "https://jihulab.com/my-program/zhiboyuan/-/raw/main/zhiboyuan.txt"
+  ]
+}
