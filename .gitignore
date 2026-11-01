@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+output/live.m3u
+output/live.txt
+output/tvbox.json
+output/tvbox_single.json
