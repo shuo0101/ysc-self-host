@@ -1,6 +1,4 @@
 {
-  "_说明": "影视仓自建源配置文件。部署时把 base_url 里的 你的用户名 和 仓库名 换成你自己的。源地址均套加速前缀，国内可直接访问。",
-
   "base_url": "https://mirror.ghproxy.com/https://raw.githubusercontent.com/shuo0101/ysc-self-host/main",
 
   "logo_base": "https://ghproxy.cc/https://raw.githubusercontent.com/fanmingming/live/main/tv/",
