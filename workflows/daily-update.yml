@@ -1,0 +1,42 @@
+name: Daily TVBox Sources Update
+
+on:
+  schedule:
+    - cron: '0 0,12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y ffmpeg
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run aggregator
+        run: python aggregator.py
+
+      - name: Commit & Push
+        run: |
+          git config --global user.name "tvbox-bot"
+          git config --global user.email "bot@tvbox.local"
+          git add output/ data/sources.db
+          git diff --staged --quiet || git commit -m "🤖 自动更新 $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')"
+          git push

@@ -1,0 +1,68 @@
+name: Sync EPG
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Create output dir
+        run: mkdir -p output
+
+      - name: Download EPG sources
+        run: |
+          curl -L --retry 3 --max-time 120 "https://cdn.jsdelivr.net/gh/BurningC4/Chinese-IPTV@master/guide.xml" -o output/epg.xml || echo "主EPG下载失败"
+          curl -L --retry 3 --max-time 60 "https://live.fanmingming.com/e.xml" -o output/epg_fanmingming.xml || echo "备用EPG1下载失败"
+          curl -L --retry 3 --max-time 60 "https://epg.112114.xyz/pp.xml" -o output/epg_112114.xml || echo "备用EPG2下载失败"
+
+      - name: Validate XML
+        run: |
+          python -c "
+          import xml.etree.ElementTree as ET, os
+          for f in ['output/epg.xml', 'output/epg_fanmingming.xml', 'output/epg_112114.xml']:
+              if not os.path.exists(f): continue
+              try:
+                  ET.parse(f)
+                  print(f'✅ {f} 合法 ({os.path.getsize(f)//1024}KB)')
+              except ET.ParseError:
+                  os.remove(f)
+                  print(f'❌ {f} 删除')
+          "
+
+      - name: Generate EPG index
+        run: |
+          python -c "
+          import json, os
+          from datetime import datetime
+          from pathlib import Path
+          idx = {'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'sources': []}
+          for f, n in [('epg.xml','主EPG'),('epg_fanmingming.xml','备用1'),('epg_112114.xml','备用2')]:
+              p = Path('output')/f
+              if p.exists() and p.stat().st_size > 1000:
+                  idx['sources'].append({'name': n, 'file': f, 'size_kb': round(p.stat().st_size/1024,1)})
+          with open('output/epg_index.json','w') as fp: json.dump(idx, fp, ensure_ascii=False, indent=2)
+          "
+
+      - name: Commit & Push
+        run: |
+          git config --global user.name "tvbox-bot"
+          git config --global user.email "bot@tvbox.local"
+          git add output/epg.xml output/epg_fanmingming.xml output/epg_112114.xml output/epg_index.json
+          git diff --staged --quiet || git commit -m "📅 更新EPG $(TZ='Asia/Shanghai' date '+%Y-%m-%d')"
+          git push
