@@ -1,77 +1,81 @@
-# 影视仓自建源 (TVBox Self-Host)
+# 影视仓自建源
 
-让影视仓/影视仓系 App 的**点播源 + 直播源自动更新**的零成本方案。
-
-## 原理
-
-```
-影视仓 App ──自动拉取──▶ GitHub 仓库 (本仓库)
-                           │
-                           ├── output/tvbox.json  (单仓聚合, 点播)
-                           ├── output/urls.json    (多仓订阅, 点播)
-                           └── output/live.m3u     (直播源, 每日刷新)
-```
-
-GitHub Actions 每天北京时间 **06:00 / 18:00** 自动抓取多个上游源, 合并去重、测速筛选, 只保留可用的。
-
-## 快速开始
-
-### 1. Fork 本仓库
-
-点右上角 Fork, 然后 **Settings → Actions → General → Workflow permissions → 选 `Read and write permissions` → Save**。
-否则工作流没权限把结果写回仓库。
-
-### 2. 编辑 `config/sources.json`
-
-只需要改这个文件:
-
-| 字段 | 说明 |
-|---|---|
-| `base_url` | 你仓库 raw 地址(套上国内加速前缀), 用于回写进 lives |
-| `vod_sources` | 点播源列表, 每个是 `{name, url}` |
-| `live_sources` | 直播源列表, 直接填 m3u/txt 地址 |
-| `spider` | 可选, 自定义 jar 包地址 |
-
-### 3. 开启 Actions
-
-进入仓库 **Actions** 标签 → 开启工作流 → **Run workflow** 手动跑一次。
-跑完后 `output/` 目录会生成 3 个文件。
-
-### 4. 套国内加速前缀
-
-把 raw 地址拼在加速站后面:
-
-```
-https://gh-proxy.com/https://raw.githubusercontent.com/你的用户名/tvbox-self-host/main/output/tvbox.json
-```
-
-> 仓库必须 **Public**, 否则影视仓无法免鉴权拉取。不要放任何私人信息。
-
-## 在影视仓里填地址
-
-| 入口 | 地址 |
-|---|---|
-| 配置地址 (点播) | `.../output/tvbox.json` |
-| 直播订阅 (直播) | `.../output/live.m3u` |
-
-**注意**: 直播 m3u 不要填进"配置地址", 否则会提示解析失败。
+TVBox / 影视仓的**源自动更新仓库**：点播源聚合去重 + 直播源每日探测刷新，输出带台标、EPG、分组的 m3u。
 
 ## 目录结构
 
 ```
-config/sources.json          # 你只需要改这个
-scripts/vod_update.py        # 点播源聚合
-scripts/live_update.py       # 直播源抓取+测速+去重, 4K优先排序
-.github/workflows/update.yml # 每日自动更新
-output/                      # 产物(自动生成, 不要手改)
+config/sources.json            ← 你唯一需要改的文件
+scripts/
+  ├── live_update.py           直播源抓取+探测测速+4K权重排序+分组+台标
+  ├── vod_update.py            点播源聚合去重
+  └── test_local.py            本地测试（不联网）
+.github/workflows/update.yml   每天北京时间 06:00/18:00 自动跑
+output/                        自动生成，别手改
+  ├── tvbox.json               多仓聚合配置
+  ├── tvbox_single.json        精简单仓（站点上限60，加载快）
+  ├── live.m3u                 直播源（带台标+EPG+分组）
+  └── live.txt                 直播源（简洁格式）
 ```
 
-## 关于 4K
+## 7 步搭建
 
-- 直播源按 **分辨率关键词** 排序, 4K/2160 频道排在最前
-- 真 4K 直播源稀少, 标着 4K 的很多实际是 1080P, 以实际播放分辨率为准
-- 点播 4K 取决于 spider 里有没有高码率线路
+### 1. 新建仓库
+GitHub → New repository → 起名（如 `ysc-self-host`）→ **Public** → 不勾选任何初始化选项。
 
-## 免责声明
+### 2. 上传文件
+把本仓库内容（不含外层文件夹）拖到仓库上传页面 → Commit message 写 `init` → Commit。
 
-本仓库仅提供**技术框架**, 不存储、不提供任何影视内容。源地址由用户自行配置与维护, 请确保使用合法授权的资源。
+### 3. 开写入权限（必做）
+Settings → Actions → General → Workflow permissions → **Read and write permissions** → Save。
+
+### 4. 改 `config/sources.json`
+只改 `base_url` 这一行，换成你的实际地址：
+
+```json
+"base_url": "https://mirror.ghproxy.com/https://raw.githubusercontent.com/你的用户名/你的仓库名/main"
+```
+
+源地址已经预填了 20 个点播源 + 12 个直播源，全部套了加速前缀，国内可直接访问。
+
+### 5. 跑工作流
+Actions → 开启工作流 → 左侧「每日更新源」→ Run workflow → 等 1~2 分钟变绿。
+仓库根目录会出现 `output/` 文件夹。
+
+### 6. 拿地址
+点开 `output/tvbox.json` → Raw → 复制链接 → 前面加加速前缀：
+
+```
+https://mirror.ghproxy.com/https://raw.githubusercontent.com/你的用户名/你的仓库名/main/output/tvbox.json
+https://mirror.ghproxy.com/https://raw.githubusercontent.com/你的用户名/你的仓库名/main/output/live.m3u
+```
+
+### 7. 填进影视仓
+- **配置地址**（点播）：填 `tvbox.json` 地址
+- **直播订阅**（直播）：填 `live.m3u` 地址
+
+> 直播 m3u **别填进配置地址**，会报解析失败。
+
+## 以后改源
+
+只改 `config/sources.json`：
+- **加源**：在 `vod_sources` / `live_sources` 数组里加一个对象
+- **删失效源**：删掉那一行
+- **改地址**：只改 `url` 的值
+
+改完手动 Run workflow 一次，几十秒后影视仓下次打开自动拿到新的。
+
+## 本地测试
+
+```bash
+python scripts/test_local.py
+```
+
+验证分组、台标、清晰度权重、EPG 等逻辑，不联网。
+
+## 注意事项
+
+- 仓库必须 **Public**
+- 别在仓库里放任何私人信息
+- 本仓库只提供技术框架，源由你自行配置维护，注意合规
+- 源地址会过期，失效了在 `sources.json` 里删掉那一行即可

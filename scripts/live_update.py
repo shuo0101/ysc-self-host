@@ -8,7 +8,6 @@ import os
 import re
 import sys
 import time
-import socket
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -30,7 +29,7 @@ HEADERS = {
 # 4K/高清权重：排序时优先保留清晰度高的线路
 QUALITY_WEIGHT = [
     ("4K", 100), ("2160", 95), ("UHD", 90), ("超清", 85), ("蓝光", 80),
-    ("1080", 70), ("高清", 50), ("HD", 50),
+    ("1080", 70), ("蓝光", 65), ("高清", 50), ("HD", 50),
     ("720", 40), ("标清", 25), ("SD", 25),
 ]
 
@@ -49,11 +48,11 @@ def load_config():
 
 
 def fetch_text(url, timeout=15):
-    """抓取文本，优先 requests；github raw 类地址需保留原 url 不动。"""
     if HAVE_REQUESTS:
         r = requests.get(url, timeout=timeout, headers=HEADERS)
         r.raise_for_status()
-        if r.encoding and r.encoding.lower() in ("iso-8859-1", "latin-1"):
+        # 兼容各种编码
+        if r.encoding and r.encoding.lower() == "iso-8859-1":
             r.encoding = r.apparent_encoding or "utf-8"
         return r.text
     req = urllib.request.Request(url, headers=HEADERS)
@@ -88,14 +87,17 @@ def parse_m3u(text):
             tm = re.search(r'tvg-name="([^"]*)"', line)
             if tm:
                 extra["tvg_name"] = tm.group(1).strip()
+            # 频道名在最后一个逗号后
             cm = re.search(r",(.+)$", line)
             name = cm.group(1).strip() if cm else "未知频道"
             continue
         if line.startswith("#"):
+            # 其他指令行（如 #EXTGRP）作为分组
             gm = re.search(r'#EXTGRP:(.+)', line)
             if gm:
                 group = gm.group(1).strip()
             continue
+        # 是 URL
         url = line.strip()
         if not url:
             continue
@@ -134,6 +136,7 @@ def parse_txt(text):
 
 
 def quality_score(name):
+    """根据频道名/线路名计算清晰度权重"""
     s = 0
     up = name.upper()
     for kw, w in QUALITY_WEIGHT:
@@ -172,6 +175,7 @@ def probe(item):
         return (item, False, elapsed)
 
 
+# CCTV 子频道细分映射：先按频道号/关键词判断
 _CCTV_SUB = {
     "4K": "4K专区", "8K": "4K专区",
     "5": "体育赛事", "5+": "体育赛事", "体育": "体育赛事",
@@ -184,19 +188,25 @@ _CCTV_SUB = {
 
 
 def classify_group(name):
+    """根据频道名归类"""
     n = name
     up = n.upper()
 
+    # 1. CCTV 子频道：按频道号细分
     m = re.search(r'CCTV\s*-?\s*(\d{1,2}\+?)', up)
     if m:
         num = m.group(1)
+        # CCTV5+ 也算体育
         if num in ("5+", "5"):
             return "体育赛事"
         if num in _CCTV_SUB:
             return _CCTV_SUB[num]
+        if num == "5":
+            return "体育赛事"
         return "央视频道"
 
     if "CCTV" in up or "中央" in n or "央视" in n:
+        # 带关键词的 CCTV 变体（无数字写法）
         for kw, grp in [("4K", "4K专区"), ("8K", "4K专区"),
                         ("体育", "体育赛事"), ("纪录", "纪录片"),
                         ("少儿", "少儿动画"), ("动画", "少儿动画"),
@@ -205,6 +215,7 @@ def classify_group(name):
                 return grp
         return "央视频道"
 
+    # 2. 地方频道：省级行政区名 + 卫视/频道
     provinces = ["北京", "上海", "广东", "浙江", "江苏", "湖南", "四川",
                  "山东", "湖北", "河北", "河南", "安徽", "福建", "江西",
                  "辽宁", "天津", "重庆", "山西", "陕西", "云南", "广西",
@@ -214,9 +225,11 @@ def classify_group(name):
         if p in n:
             return "地方频道"
 
+    # 3. 卫视高清（非省级但带"卫视"字样）
     if "卫视" in n:
         return "卫视高清"
 
+    # 4. 其他关键词
     for kw, grp in [("4K", "4K专区"), ("2160", "4K专区"), ("8K", "4K专区"),
                     ("体育", "体育赛事"), ("足球", "体育赛事"),
                     ("NBA", "体育赛事"), ("赛事", "体育赛事"),
@@ -231,6 +244,7 @@ def classify_group(name):
 
 
 def build_group(items):
+    """从多个源拉取，按 (组, 名) 去重，保留质量最好、最快的"""
     best = {}
     for it in items:
         key = (it["group"], it["name"])
@@ -256,6 +270,7 @@ def write_m3u(channels, logo_base, epg, out_path):
         for c in grp_chans:
             logo = c.get("logo") or ""
             if not logo and logo_base:
+                # 用频道名构造台标（兼容 fanmingming 风格）
                 logo = logo_base + c["name"] + ".png"
             inf = '#EXTINF:-1 tvg-name="%s" tvg-logo="%s" group-title="%s",%s' % (
                 c.get("tvg_name", c["name"]).replace('"', ""),
@@ -272,70 +287,38 @@ def write_txt(channels, out_path):
             f.write("%s,%s\n" % (c["name"], c["url"]))
 
 
-def _source_url(s):
-    """兼容两种字段名：url / link"""
-    return s.get("url") or s.get("link") or ""
-
-
 def main():
     os.makedirs(OUT, exist_ok=True)
-    log("ROOT=%s" % ROOT)
-    log("OUT=%s" % OUT)
-    log("CONF exists=%s" % os.path.exists(CONF))
-    log("python=%s, requests=%s" % (sys.version.split()[0], HAVE_REQUESTS))
-
     if not os.path.exists(CONF):
         log("配置文件不存在: %s" % CONF)
         sys.exit(1)
 
     cfg = load_config()
-    log("配置键: %s" % sorted(cfg.keys()))
-
-    base_url = (cfg.get("base_url") or "").rstrip("/")
-    log("base_url=%s" % base_url)
-    if not base_url or "你的用户名" in base_url or "仓库名" in base_url:
-        log("!! base_url 未正确替换，将使用空值（EPG/台标可能不可用）")
-
-    sources = cfg.get("live_sources") or []
-    log("live_sources 数量: %d" % len(sources))
+    sources = cfg.get("live_sources", [])
     if not sources:
-        log("未配置 live_sources，退出")
+        log("未配置 live_sources")
         sys.exit(0)
 
-    log("开始抓取直播源...")
+    log("开始抓取 %d 个直播源..." % len(sources))
     all_items = []
     failed = []
-    for i, s in enumerate(sources, 1):
-        url = _source_url(s)
-        name = s.get("name", "?")
-        fmt = s.get("format", "")
-        if not url:
-            log("  [%d] %s 无 url 字段，跳过" % (i, name))
-            continue
-        log("  [%d] %s 抓取中..." % (i, name))
+    for s in sources:
+        url = s["url"]
         try:
             text = fetch_text(url)
-            log("      HTTP 内容长度 %d 字节，前 80 字: %r"
-                % (len(text.encode("utf-8", "ignore")), text[:80].replace("\n", "\\n")))
-            if fmt == "txt" or (not fmt and url.lower().endswith(".txt")):
+            kind = s.get("format", "")
+            if kind == "txt" or (not kind and url.lower().endswith(".txt")):
                 items = parse_txt(text)
             else:
                 items = parse_m3u(text)
-            log("  [OK] %s -> %d 条" % (name, len(items)))
+            log("  [OK] %s -> %d 条" % (s["name"], len(items)))
             all_items += items
         except Exception as e:
-            log("  [FAIL] %s: %s" % (name, e))
-            failed.append({"name": name, "error": str(e)})
+            log("  [FAIL] %s: %s" % (s["name"], e))
+            failed.append({"name": s["name"], "error": str(e)})
 
-    log("共抓取 %d 条原始频道" % len(all_items))
+    log("共抓取 %d 条原始频道，开始探测测速..." % len(all_items))
 
-    if not all_items:
-        log("!! 没有任何频道被抓到，生成空产出并退出")
-        write_m3u([], "", "", os.path.join(OUT, "live.m3u"))
-        write_txt([], os.path.join(OUT, "live.txt"))
-        return
-
-    log("开始探测测速（共 %d 条，每批 40）..." % len(all_items))
     results = []
     if HAVE_REQUESTS:
         with ThreadPoolExecutor(max_workers=40) as ex:
@@ -353,25 +336,24 @@ def main():
     ok_items = [r[0] for r in results if r[1]]
     log("有效频道 %d 条，无效 %d 条" % (len(ok_items), len(results) - len(ok_items)))
 
+    # 归类 + 去重
     for it in ok_items:
         it["group"] = classify_group(it["name"])
-        it["ok"] = True
 
     best = build_group(ok_items)
     channels = sorted(best.values(), key=lambda c: -c["score"])
     log("去重后 %d 个频道" % len(channels))
 
-    logo_base = cfg.get("logo_base", "") or ""
-    epg = cfg.get("epg", "") or ""
+    base_url = cfg.get("base_url", "").rstrip("/")
+    logo_base = cfg.get("logo_base", "")
+    epg = cfg.get("epg", "")
     epg = epg.replace("${BASE}", base_url) if epg else ""
 
-    m3u_path = os.path.join(OUT, "live.m3u")
-    txt_path = os.path.join(OUT, "live.txt")
-    write_m3u(channels, logo_base, epg, m3u_path)
+    write_m3u(channels, logo_base, epg, os.path.join(OUT, "live.m3u"))
     write_txt(channels, os.path.join(OUT, "live.txt"))
-    log("已生成 %s (%d 字节), %s"
-        % (m3u_path, os.path.getsize(m3u_path), txt_path))
+    log("已生成 output/live.m3u, output/live.txt")
 
+    # 统计
     by_group = {}
     for c in channels:
         by_group[c["group"]] = by_group.get(c["group"], 0) + 1
