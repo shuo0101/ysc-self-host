@@ -1,0 +1,10 @@
+{
+  "lives": [
+    {
+      "name": "直播",
+      "url": "https://cdn.jsdelivr.net/gh/shuo0101/ysc-self-host@main/output/live.m3u",
+      "epg": "https://cdn.jsdelivr.net/gh/shuo0101/ysc-self-host@main/output/epg.xml"
+    }
+  ],
+  "updated": "2026-11-01T19:31:47.752503"
+}
