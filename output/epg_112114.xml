@@ -12561,6 +12561,12 @@
 	<programme channel="咪咕综合体育" start="20261102000000 +0800" stop="20261102024000 +0800">
 		<title lang="zh">英超赛场-26/27赛季 英超 第9轮 利物浦-阿森纳 直播</title>
 	</programme>
+	<programme channel="咪咕综合体育" start="20261102024500 +0800" stop="20261102031000 +0800">
+		<title lang="zh">欧陆足球版图-英超特辑</title>
+	</programme>
+	<programme channel="咪咕综合体育" start="20261102031000 +0800" stop="20261102033000 +0800">
+		<title lang="zh">频道宣传</title>
+	</programme>
 	<channel id="咪咕足球">
 		<display-name lang="zh">咪咕足球</display-name>
 	</channel>
@@ -40419,6 +40425,9 @@
 	<programme channel="newtv超级综艺" start="20261102015800 +0800" stop="20261102024500 +0800">
 		<title lang="zh">16_兰香如故</title>
 	</programme>
+	<programme channel="newtv超级综艺" start="20261102024500 +0800" stop="20261102033100 +0800">
+		<title lang="zh">17_兰香如故</title>
+	</programme>
 	<channel id="newtv超级体育">
 		<display-name lang="zh">NEWTV超级体育</display-name>
 	</channel>
@@ -40428,6 +40437,9 @@
 	<programme channel="newtv超级体育" start="20261102003000 +0800" stop="20261102023600 +0800">
 		<title lang="zh">英超-第9轮-利物浦VS阿森纳</title>
 	</programme>
+	<programme channel="newtv超级体育" start="20261102023600 +0800" stop="20261102040000 +0800">
+		<title lang="zh">CBA-第2轮-浙江稠州金租VS山东高速</title>
+	</programme>
 	<channel id="newtv超级电影">
 		<display-name lang="zh">NEWTV超级电影</display-name>
 	</channel>
@@ -40436,6 +40448,9 @@
 	</programme>
 	<programme channel="newtv超级电影" start="20261102013400 +0800" stop="20261102030400 +0800">
 		<title lang="zh">鲨鱼星球</title>
+	</programme>
+	<programme channel="newtv超级电影" start="20261102030400 +0800" stop="20261102042000 +0800">
+		<title lang="zh">桃花诗社</title>
 	</programme>
 	<channel id="newtv超级电视剧">
 		<display-name lang="zh">NEWTV超级电视剧</display-name>
@@ -40451,6 +40466,9 @@
 	</programme>
 	<programme channel="newtv超级电视剧" start="20261102021700 +0800" stop="20261102030200 +0800">
 		<title lang="zh">22_纯真年代的爱情</title>
+	</programme>
+	<programme channel="newtv超级电视剧" start="20261102030200 +0800" stop="20261102034700 +0800">
+		<title lang="zh">23_纯真年代的爱情</title>
 	</programme>
 	<channel id="newtv精品大剧">
 		<display-name lang="zh">NEWTV精品大剧</display-name>
@@ -41012,6 +41030,9 @@
 	</programme>
 	<programme channel="newtv金牌综艺" start="20261102021200 +0800" stop="20261102025600 +0800">
 		<title lang="zh">05_秋蝉</title>
+	</programme>
+	<programme channel="newtv金牌综艺" start="20261102025600 +0800" stop="20261102032600 +0800">
+		<title lang="zh">珍膳私享特膳粉好物推荐第四期</title>
 	</programme>
 	<channel id="newtv精品体育">
 		<display-name lang="zh">NEWTV精品体育</display-name>
