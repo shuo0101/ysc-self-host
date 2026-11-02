@@ -3,18 +3,18 @@
 
 vod:
   timeout: 12              # 单源请求超时（秒）
-  concurrency: 15          # 并发连接数
+  concurrency: 100          # 并发连接数
   min_json_size: 200       # 视为有效 JSON 的最小字节数
   max_sources: 1500        # 最多保留的点播源数量
   discover_per_page: 20    # GitHub Search 每页结果数
 
 live:
-  timeout: 8               # HEAD 探测超时（秒）
+  timeout: 7               # HEAD 探测超时（秒）
   probe_timeout: 6         # ffprobe 探测超时（秒）
-  concurrency: 10          # 并发连接数
+  concurrency: 50          # 并发连接数
   min_resolution: 720      # 最低分辨率，低于此值丢弃（720/1080/2160）
   max_channels: 1500       # 最多保留的频道数量
-  urls_per_channel: 6      # 每个频道保留的线路数
+  urls_per_channel: 5      # 每个频道保留的线路数
   sort_weights:            # 线路评分权重，须加和为 1
     resolution: 0.40
     speed: 0.30
