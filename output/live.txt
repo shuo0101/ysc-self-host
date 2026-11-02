@@ -8,6 +8,7 @@ CCTV-4,http://207.56.13.146:81/cdnlive/cctv4.m3u8
 CCTV-14 HD (1080p),https://event.pull.hebtv.com/jishi/cp2.m3u8
 CCTV-14 HD (1080p),http://198.204.228.26/live/cctv14hd.m3u8
 CCTV-14 HD (1080p),http://204.12.221.218:8181/3m1080p/cctv14.m3u8
+CCTV-5,http://153.0.171.163:85/tsfile/live/1015_1.m3u8?key=txiptv&playlive=1&authid=0
 CCTV-5,http://107.150.60.122/live/cctv5hd.m3u8
 CCTV-5,http://207.56.13.146:81/cdnlive/cctv5.m3u8
 CCTV-12 (720p),http://107.150.60.122/live/cctv12hd.m3u8
@@ -19,10 +20,9 @@ CCTV-16,http://207.56.13.146:81/cdnlive/cctv16.m3u8
 东方卫视,http://bp-resource-dfl.bestv.cn/155/3/video.m3u8
 河北卫视,http://38.75.136.137:98/gslb/dsdqpub/hewshd.m3u8?auth=testpub
 新疆卫视,http://218.84.12.186:8001/hls/main/playlist.m3u8?zxinjd;http://218.84.12.186:8001/hls/main/playlist.m3u8zxinjd
-延边卫视,https://srs.iyb983.cn:443/video/CYS/index.m3u8
 延边卫视,https://srs.iyb983.cn/video/CYS/index.m3u8
+延边卫视,https://srs.iyb983.cn:443/video/CYS/index.m3u8
 CCTV-3 (720p),http://74.91.26.218:82/live/cctv3hd.m3u8
-CCTV-3 (720p),http://120.40.39.246:352/newlive/live/hls/3/live.m3u8
 CCTV-15 (720p),http://74.91.26.218:82/live/cctv15hd.m3u8
 CCTV-12 (720p),http://74.91.26.218:82/live/cctv12hd.m3u8
 CCTV-14 HD (1080p),http://74.91.26.218:82/live/cctv14hd.m3u8
@@ -57,7 +57,6 @@ Chifeng Comprehensive News Chanel,http://play1-qk.nmtv.cn/live/1735546697341033.
 之江纪录,https://ali-m-l.cztv.com/channels/lantian/channel012/1080p.m3u8
 Zhejiang International Channel,https://ali-m-l.cztv.com/channels/lantian/channel10/1080p.m3u8
 Anhui TV,https://restream.pdtvhd.com/memfs/c1cd2ed0-3b2b-4c25-af98-a7fb0b1eb130.m3u8
-Hunan Economy Channel,https://p8.vzan.com/slowlive/415983998730568937/live.m3u8
 Hunan TV (2160p),http://hlsal-ldvt.qing.mgtv.com/nn_live/nn_x64/dWlwPTEyNy4wLjAuMSZ1aWQ9cWluZy1jbXMmbm5fdGltZXpvbmU9OCZjZG5leF9pZD1hbF9obHNfbGR2dCZ1dWlkPTliODY4NmU5ZTM2YzYwMmMmZT02OTE0NjA0JnY9MSZpZD1ITldTWkdTVCZzPTcwN2RiYTc2YzJjNmJmMTQ4MmUyZGYzOWU2NWM3YWFi/HNWSZGST.m3u8
 Guangzhou TV,https://tencentplaybusiness.gztv.com/live/zonghes.m3u8
 Kangba TV,http://110.185.237.164:8888/hls/30/index.m3u8
@@ -67,4 +66,3 @@ Xinjiang TV 5,http://120.70.60.179:9901/tsfile/live/1002_1.m3u8?key=txiptv&playl
 Xinjiang TV 8,http://120.70.60.179:9901/tsfile/live/1002_1.m3u8?authid=0&key=txiptv&playlive=1
 Bread TV (720p),https://video.bread-tv.com:8091/hls-live24/online/index.m3u8
 TV BRICS Chinese (1080p),https://chibrics.mediacdn.ru/cdn/brics/chinese/playlist.m3u8
-Dongguan Comprehensive News Channel,https://stream.sun0769.com/dgrtv1/mp4tv1_800/index.m3u8
