@@ -543,7 +543,7 @@ async def main():
     init_db()
     Path('output').mkdir(exist_ok=True)
 
-    repo = os.environ.get('GITHUB_REPOSITORY', '你的用户名/ysc-self-host')
+    repo = os.environ.get('GITHUB_REPOSITORY', 'shuo0101/ysc-self-host')
     branch = os.environ.get('GITHUB_REF_NAME', 'main')
     prefix = f"https://cdn.jsdelivr.net/gh/{repo}@{branch}/output"
 
