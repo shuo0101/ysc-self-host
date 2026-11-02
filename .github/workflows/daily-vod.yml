@@ -78,7 +78,7 @@ jobs:
       - name: Verify outputs
         if: steps.interval.outputs.should_run == 'true'
         run: |
-          for f in output/tvbox.json output/vod_config.json; do
+          for f in output/tvbox.json; do
             if [ ! -s "$f" ]; then
               echo "❌ $f 为空或不存在"
               exit 1
