@@ -13,12 +13,12 @@ live:
   probe_timeout: 6         # ffprobe 探测超时（秒）
   concurrency: 50          # 并发连接数
   min_resolution: 720      # 最低分辨率，低于此值丢弃（720/1080/2160）
-  max_channels: 1500       # 最多保留的频道数量
+  max_channels: 2000       # 最多保留的频道数量
   urls_per_channel: 5      # 每个频道保留的线路数
   sort_weights:            # 线路评分权重，须加和为 1
-    resolution: 0.40
+    resolution: 0.35
     speed: 0.30
-    delay: 0.20
+    delay: 0.25
     stability: 0.10
 
 logo:
