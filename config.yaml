@@ -1,0 +1,69 @@
+# TVBox 自动聚合配置
+# aggregator.py 会在启动时读取本文件并覆盖内置默认值
+
+vod:
+  timeout: 12              # 单源请求超时（秒）
+  concurrency: 100          # 并发连接数
+  min_json_size: 200       # 视为有效 JSON 的最小字节数
+  max_sources: 1500        # 最多保留的点播源数量
+  discover_per_page: 20    # GitHub Search 每页结果数
+
+live:
+  # 直播源地址（支持多个）；缺失会导致 discover_live() 返回空、产物无频道
+  urls:
+    # 国内源（直连优先）
+    - "https://cdn.jsdelivr.net/gh/Guovin/iptv-api@master/output/result.m3u"
+    - "https://cdn.jsdelivr.net/gh/Lightconer/TVBox-Sources@main/output/live.txt"
+    - "https://cdn.jsdelivr.net/gh/Lightconer/TVBox-Sources@main/output/live.m3u"
+    - "https://live.fanmingming.com/tv/m3u/ipv6.m3u"
+    - "https://raw.githubusercontent.com/hwansong/ipv6tv/main/iptv6.m3u"
+    - "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/cn.m3u"
+    # 海外/国际源（需代理，作为兜底）
+    - "https://iptv-org.github.io/iptv/categories/china.m3u"
+    - "https://raw.githubusercontent.com/bevacqua/awesome-tv/master/tv.m3u"
+  # 数据库路径：必须与 database.py 的 DB 一致，web_ui.py 会读取此值
+  db_path: "data/sources.db"
+  # GitHub 代理前缀池（依次尝试，挂了就换）
+  proxies:
+    - "https://gh-proxy.com/"
+    - "https://ghproxy.cc/"
+    - "https://gh.llkk.cc/"
+    - "https://hub.fastgit.xyz/"
+    - "https://gh.api.99988866.xyz/"
+  # jsDelivr 镜像域名池
+  jsdelivr_hosts:
+    - "https://cdn.jsdelivr.net"
+    - "https://fastly.jsdelivr.net"
+    - "https://gcore.jsdelivr.net"
+    - "https://testingcf.jsdelivr.net"
+
+  timeout: 7               # HEAD 探测超时（秒）
+  probe_timeout: 6         # ffprobe 探测超时（秒）
+  concurrency: 50          # 并发连接数
+  min_resolution: 720      # 最低分辨率，低于此值丢弃（720/1080/2160）
+  max_channels: 2000       # 最多保留的频道数量
+  urls_per_channel: 5      # 每个频道保留的线路数
+  cache_dir: "sources_cache"   # 缓存目录
+  cache_ttl_hours: 12          # 缓存有效期（小时）
+  fetch_timeout: 30            # 单次拉取超时（秒）
+  sort_weights:            # 线路评分权重，须加和为 1
+    resolution: 0.35
+    speed: 0.30
+    delay: 0.25
+    stability: 0.10
+
+logo:
+  base_url: "https://live.fanmingming.com/tv"   # 台标基地址
+
+discover:
+  # 点播源种子列表，GitHub Search 失败时的兜底
+  vod_seeds:
+    - "https://gh-proxy.com/https://raw.githubusercontent.com/jifeng250/tvbox-sources/main/urls.json"
+    - "https://gh-proxy.com/https://raw.githubusercontent.com/wzh15802/tvbox/main/tv.json"
+
+epg:
+  # 电子节目单下载地址（sync-epg.yml 使用）
+  primary: "https://cdn.jsdelivr.net/gh/BurningC4/Chinese-IPTV@master/guide.xml"
+  backups:
+    - "https://live.fanmingming.com/e.xml"
+    - "https://epg.112114.xyz/pp.xml"
