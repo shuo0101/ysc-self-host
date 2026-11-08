@@ -1,0 +1,81 @@
+name: Daily TVBox Live Sources Update
+
+"on":
+  schedule:
+    # UTC 时间。北京时间 = UTC+8，所以 UTC 18:00 = 北京时间 02:00
+    - cron: '0 18 * * *'   # 北京时间 02:00，每天
+  workflow_dispatch:        # 允许手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+      - name: Run live aggregator
+        run: python aggregator.py --live
+        env:
+          PYTHONWARNINGS: default
+
+      # 防止提交空文件 / 损坏的 JSON
+      - name: Verify outputs
+        run: |
+          for f in output/tvbox.json output/live.txt output/live.m3u; do
+            if [ ! -s "$f" ]; then
+              echo "❌ $f 为空或不存在"
+              exit 1
+            fi
+          done
+          python -c "import json;json.load(open('output/tvbox.json'))" || (echo "❌ tvbox.json 不是合法 JSON" && exit 1)
+
+      - name: Commit & Push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 清理过期缓存：12 小时以上未更新的视为失效（IPv6 源内容波动大）
+          [ -d sources_cache ] && find sources_cache -name "*.m3u" -mmin +720 -delete || true
+
+          [ -d output ] && git add output/ || true
+          [ -d sources_cache ] && git add sources_cache/ || true
+          git diff --cached --quiet && echo "无变更，跳过提交" && exit 0
+
+          # 先 fetch 再 rebase，避免与并发推送的工作流互相覆盖
+          git fetch origin "${GITHUB_REF_NAME}"
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
+            git rebase --abort || true
+            exit 0
+          fi
+
+          git commit -m "chore: auto update live sources [skip ci]" && \
+          (git push origin "HEAD:${GITHUB_REF_NAME}" || \
+            (git fetch origin "${GITHUB_REF_NAME}" && \
+             git rebase "origin/${GITHUB_REF_NAME}" && \
+             git push origin "HEAD:${GITHUB_REF_NAME}"))
+
+      - name: Notify on failure
+        if: failure()
+        run: echo "::error::直播源聚合失败，请查看上方日志"
