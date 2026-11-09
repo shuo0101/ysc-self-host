@@ -1,0 +1,51 @@
+name: 每日 EPG 同步
+
+on:
+  schedule:
+    - cron: '0 17 * * *'   # UTC 17:00 = 北京时间次日 01:00，最先执行
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 同步 EPG
+        run: python scripts/epg_sync.py
+
+      - name: 提交并推送
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          [ -d output ] && git add output/ || true
+
+          if git diff --cached --quiet; then
+            git reset
+            echo "无变更，跳过提交"
+            exit 0
+          fi
+
+          git fetch origin "${GITHUB_REF_NAME}"
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
+            git rebase --abort || true
+            exit 0
+          fi
+
+          git commit -m "chore: auto sync epg [skip ci]" && \
+          (git push origin "HEAD:${GITHUB_REF_NAME}" || \
+            (git fetch origin "${GITHUB_REF_NAME}" && \
+             git rebase "origin/${GITHUB_REF_NAME}" && \
+             git push origin "HEAD:${GITHUB_REF_NAME}"))
