@@ -9,28 +9,98 @@ vod:
   discover_per_page: 20    # GitHub Search 每页结果数
 
 live:
-  # 直播源地址（支持多个）；缺失会导致 discover_live() 返回空、产物无频道
-  urls:
-    # 国内源（直连优先）
+  # ═══════════════════════════════════════════════════════════
+  # 直播源分三组：
+  #   urls_static     —— 无需鉴权的固定直链，每次都抓取，享有官方源清晰度加分
+  #   urls_static_4k  —— 静态源里「可能出 4K」的（河南系 / 湖南系等），
+  #                       不享受静态源加分，推迟到第 3 轮与刷新源同场竞争，
+  #                       保留拿到 4K 线路的机会
+  #   urls_refresh    —— 带签名/鉴权、会过期的源（txSecret / nn_live / mgtv 等），
+  #                       只在缓存缺失或 FORCE_REFRESH=1 时抓取
+  # 排序规则（见 aggregator.py sort_weights）：
+  #   清晰度(分辨率档位) 45% > 稳定性(历史成功率) 25% > 响应速度 15% > 首字节延迟 15%
+  # ═══════════════════════════════════════════════════════════
+
+  # ── 第 1 组：官方/长期静态源（无需鉴权，固定直链）──
+  urls_static:
+    # 官方聚合 / 镜像（固定地址）
     - "https://cdn.jsdelivr.net/gh/Guovin/iptv-api@master/output/result.m3u"
     - "https://cdn.jsdelivr.net/gh/Lightconer/TVBox-Sources@main/output/live.txt"
     - "https://cdn.jsdelivr.net/gh/Lightconer/TVBox-Sources@main/output/live.m3u"
+    # 官方静态直链（央视+ / CGTN / 北邮 IPTV / 省级官方 HLS）
+    - "https://cd-live-stream.news.cctvplus.com/live/smil:CHANNEL1.smil/playlist.m3u8"
+    - "https://global.cgtn.cicc.media.caton.cloud/master/cgtn-america.m3u8"
+    - "http://ivi.bupt.edu.cn/hls/btv1.m3u8"
+    - "http://ivi.bupt.edu.cn/hls/gdhd.m3u8"
+    - "http://ivi.bupt.edu.cn/hls/qhtv.m3u8"
+    - "http://ivi.bupt.edu.cn/hls/jxtv.m3u8"
+    - "http://ivi.bupt.edu.cn/hls/tjtv.m3u8"
+    # 4K / 纯享（真 4K 源，第 1 轮就会触发频道跳过）
+    - "https://event.pull.hebtv.com:443/live/live101.m3u8"
+    - "https://livepull-tcms.sztv.com.cn/live/sz4Kpgm.m3u8"
+    # 省级官方 HLS（1080p）
+    - "https://test1.live.sdetv.com.cn/live/dianshizhibo/playlist.m3u8"
+    - "http://bp-resource-dfl.bestv.cn/155/3/video.m3u8"
+    # 浙江系（8 个频道，1080p）
+    - "https://ali-m-l.cztv.com/channels/lantian/channel002/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel003/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel004/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel006/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel007/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel008/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel010/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel011/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel012/1080p.m3u8"
+    # 港澳静态源
+    - "http://live4.tdm.com.mo:80/ch1/_definst_/ch1.live/playlist.m3u8"
+    - "http://zhibo.hkstv.tv/livestream/mutfysrq/playlist.m3u8"
+    # IPv6 兜底（解除 IPv6 过滤，单栈 IPv6 也可用）
     - "https://live.fanmingming.com/tv/m3u/ipv6.m3u"
     - "https://raw.githubusercontent.com/hwansong/ipv6tv/main/iptv6.m3u"
-    - "https://raw.githubusercontent.com/iptv-org/iptv/master/streams/cn.m3u"
-    # 海外/国际源（需代理，作为兜底）
+    # 官方目录（按国家/类别，量大但质量参差，放最后）
+    - "https://iptv-org.github.io/iptv/countries/cn.m3u"
+    - "https://iptv-org.github.io/iptv/countries/hk.m3u"
+    - "https://iptv-org.github.io/iptv/countries/tw.m3u"
     - "https://iptv-org.github.io/iptv/categories/china.m3u"
-    - "https://raw.githubusercontent.com/bevacqua/awesome-tv/master/tv.m3u"
-  # 数据库路径：必须与 database.py 的 DB 一致，web_ui.py 会读取此值
+
+  # ── 第 2 组：静态源里「可能出 4K」的（河南系 / 湖南系等）──
+  # 这些源本身无需鉴权、可长期抓取，但偶尔会出 4K 线路；
+  # 为避免在第 2 轮（1080p）就被锁死，推迟到第 3 轮与刷新源同场竞争。
+  # 注意：本组线路不带 _static 标记，不享受官方源清晰度加分，保证公平竞争。
+  urls_static_4k:
+    - "https://dxtx.hntv.tv/live/lypd.m3u8"
+    - "https://phoneal.qing.mgtv.com/nn_live/nn_x64/dWlwPTEyNy4wLjAuMSZ1aWQ9cWluZy1jbXMmbm5fdGltZXpvbmU9OCZjZG5leF9pZD1hbF9obHNfbGR2dCZ1dWlkPTliODY4NmU5ZTM2YzYwMm"
+    - "https://event.pull.hebtv.com/jishi/cp1.m3u8"
+    - "https://event.pull.hebtv.com/jishi/cp2.m3u8"
+
+  # ── 第 3 组：需刷新源（带签名/鉴权，会过期）──
+  # 只在缓存缺失或 FORCE_REFRESH=1 时抓取
+  urls_refresh:
+    - "https://dxtx.hntv.tv/live/lypd.m3u8"
+    - "https://phoneal.qing.mgtv.com/nn_live/nn_x64/dWlwPTEyNy4wLjAuMSZ1aWQ9cWluZy1jbXMmbm5fdGltZXpvbmU9OCZjZG5leF9pZD1hbF9obHNfbGR2dCZ1dWlkPTliODY4NmU5ZTM2YzYwMm"
+    - "https://event.pull.hebtv.com/jishi/cp1.m3u8"
+    - "https://event.pull.hebtv.com/jishi/cp2.m3u8"
+
+  # ── 三轮探测阈值 ──
+  # 第 1 轮：只探静态源中 ≥ min_static_4k 的线路，达标即锁定该频道、跳过后续轮次
+  static_4k_skip: true
+  min_static_4k: 2160
+  # 第 2 轮：只探静态源中 ≥ min_static_hd 的线路，达标即锁定
+  static_hd_skip: true
+  min_static_hd: 1080
+  # 频道达标的稳定性门槛：必须历史成功率 ≥ 此值才算「达标」，才可触发跳过
+  min_stability_effective: 0.80
+  # 静态源清晰度加分（上限 100）
+  static_res_bonus: 5
+
+  # ── 探测参数 ──
   db_path: "data/sources.db"
-  # GitHub 代理前缀池（依次尝试，挂了就换）
   proxies:
     - "https://gh-proxy.com/"
     - "https://ghproxy.cc/"
     - "https://gh.llkk.cc/"
     - "https://hub.fastgit.xyz/"
     - "https://gh.api.99988866.xyz/"
-  # jsDelivr 镜像域名池
   jsdelivr_hosts:
     - "https://cdn.jsdelivr.net"
     - "https://fastly.jsdelivr.net"
@@ -40,17 +110,26 @@ live:
   timeout: 7               # HEAD 探测超时（秒）
   probe_timeout: 6         # ffprobe 探测超时（秒）
   concurrency: 50          # 并发连接数
-  min_resolution: 720      # 最低分辨率，低于此值丢弃（720/1080/2160）
-  max_channels: 2000       # 最多保留的频道数量
-  urls_per_channel: 5      # 每个频道保留的线路数
+  min_resolution: 720      # 最低分辨率，低于此值丢弃（480/720/1080/2160）
+  max_channels: 1000       # 最多保留的频道数量
+  urls_per_channel: 4      # 每个频道保留的线路数
+  candidates_per_channel: 15  # 每频道最多送入探测的候选线路数
   cache_dir: "sources_cache"   # 缓存目录
   cache_ttl_hours: 12          # 缓存有效期（小时）
   fetch_timeout: 30            # 单次拉取超时（秒）
-  sort_weights:            # 线路评分权重，须加和为 1
-    resolution: 0.35
-    speed: 0.30
-    delay: 0.25
-    stability: 0.10
+  per_candidate_timeout: 5     # 单代理/候选超时（秒）
+  connect_timeout: 3           # 连接阶段超时（秒）
+  max_candidates: 4            # 单源最多试几种方式
+
+  # 排序权重：清晰度 + 稳定性 主导，其余为辅（自动归一化，加和为 1）
+  sort_weights:
+    resolution: 0.45
+    speed: 0.15
+    delay: 0.15
+    stability: 0.25
+  # 稳定性统计窗口：查看最近 N 次历史探测记录来计算该 URL 的成功率
+  # live_history 已改为「追加写入」结构，此值即为真实的「最近 N 次实测」
+  stability_window: 10
 
 logo:
   base_url: "https://live.fanmingming.com/tv"   # 台标基地址

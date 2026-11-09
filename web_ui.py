@@ -7,9 +7,11 @@
   - 运行历史（最近 N 次聚合结果）
   - 缓存目录状态（文件数、总大小、最后更新时间）
 
-统计口径：可用数量 = last_status='ok' 的数量，而非 enabled=1（enabled
-只表示"未被连续失败禁用"，失败的源 24 小时后 enabled 也会恢复，
-用它统计会导致可用数量虚高）。
+统计口径：可用数量 = last_status='ok' 的数量。
+
+live_history 已改为「追加写入」结构（每次探测新增一行，自增 id 为主键），
+旧的 enabled / success_count / consecutive_fails 等覆盖式字段已废弃，
+连续失败黑名单改由 get_blacklist() 实时统计该 URL 最近 5 条记录判定。
 
 数据库说明：
   - 数据库路径统一引用 config.yaml 的 live.db_path（默认 data/sources.db），

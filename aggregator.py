@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """TVBox 影视仓 全自动聚合（含 EPG + 台标）
-v5 特性：
+v7 特性：
   1. 多代理轮询：每个源自动尝试【直连 → jsDelivr镜像 / GitHub代理】，失败自动换下一个
   2. 本地缓存兜底：网络全失败时回退过期缓存，绝不返回空
   3. tvg-id 归一化：CCTV-1 / CCTV14.cn@SD / CCTV-4 统一成 CCTV14
   4. 脏数据过滤：拆多流行、剔 migutoken 签名 / .php 中转（IPv6 不过滤，单栈环境仍可访问）
   5. 分频运行：--live 仅直播，--vod 仅点播，默认全跑
-  6. 新增源：Guovin / Fanmingming / iptv-org / hwansong 等，见 config.yaml live.urls
+  6. 直播源三分：
+       urls_static       —— 无需鉴权的固定直链，每次都抓取（官方聚合 / 官方 HLS / iptv-org 目录）
+       urls_static_4k    —— 静态源里「可能出 4K」的（河南系 / 湖南系），不享受静态源加分，
+                            推迟到第 3 轮与刷新源同场竞争
+       urls_refresh      —— 带签名会过期的源，只在缓存缺失或 FORCE_REFRESH=1 时抓取
+  7. 三轮探测 + 频道级跳过：
+       第 1 轮：只探静态源中的 4K 线路，达标的频道整体跳过
+       第 2 轮：只探静态源中的 1080p 线路，达标的频道整体跳过
+       第 3 轮：静态源剩余 + urls_static_4k + 刷新源，全量探测、按分数补全到 N 路
+  8. 双权重排序：清晰度(45%) + 稳定性(25%) 主导，静态源享有官方源加分
+  9. live_history 采用「追加写入」结构（见 database.py），稳定性统计基于真实历史
 """
 import argparse
 import asyncio
@@ -53,12 +63,25 @@ FETCH_TIMEOUT = int(LIVE_CFG.get('fetch_timeout', 30))
 PROBE_TIMEOUT = int(LIVE_CFG.get('probe_timeout', 6))          # ffprobe 探测超时
 PROBE_CONCURRENCY = int(LIVE_CFG.get('concurrency', 50))       # 直播探测并发
 HEAD_TIMEOUT = int(LIVE_CFG.get('timeout', 8))                 # HEAD 探测超时
-URLS_PER_CHANNEL = int(LIVE_CFG.get('urls_per_channel', 6))    # 每频道保留线路数
+URLS_PER_CHANNEL = int(LIVE_CFG.get('urls_per_channel', 4))    # 每频道保留线路数
 MIN_RESOLUTION = int(LIVE_CFG.get('min_resolution', 720))      # 最低分辨率
-MAX_LIVE_CH = int(LIVE_CFG.get('max_channels', 1500))         # 最多频道数
-SORT_WEIGHTS = LIVE_CFG.get('sort_weights') or {              # 评分权重（自动归一化）
-    'resolution': 0.40, 'speed': 0.30, 'delay': 0.20, 'stability': 0.10,
+MAX_LIVE_CH = int(LIVE_CFG.get('max_channels', 1000))          # 最多频道数
+SORT_WEIGHTS = LIVE_CFG.get('sort_weights') or {               # 评分权重（自动归一化）
+    'resolution': 0.45, 'speed': 0.15, 'delay': 0.15, 'stability': 0.25,
 }
+# 稳定性统计窗口：取最近 N 次历史探测记录计算该 URL 的成功率
+STABILITY_WINDOW = int(LIVE_CFG.get('stability_window', 10))
+
+# 三轮探测：跳过阈值
+STATIC_4K_SKIP = bool(LIVE_CFG.get('static_4k_skip', True))
+STATIC_HD_SKIP = bool(LIVE_CFG.get('static_hd_skip', True))
+MIN_STATIC_4K = int(LIVE_CFG.get('min_static_4k', 2160))       # 第 1 轮达标线（4K）
+MIN_STATIC_HD = int(LIVE_CFG.get('min_static_hd', 1080))       # 第 2 轮达标线（1080p）
+MIN_STABILITY_EFFECTIVE = float(LIVE_CFG.get('min_stability_effective', 0.80))  # 稳定性有效阈值
+STATIC_RES_BONUS = int(LIVE_CFG.get('static_res_bonus', 5))    # 静态源清晰度加分（上限 100）
+
+# 每频道最多送入探测的候选线路数（避免个别源解析出几十条把时间烧完）
+CANDIDATES_PER_CHANNEL = int(LIVE_CFG.get('candidates_per_channel', 15))
 
 # 点播参数
 VOD_TIMEOUT = int(VOD_CFG.get('timeout', 12))
@@ -70,7 +93,7 @@ DISCOVER_PER_PAGE = int(VOD_CFG.get('discover_per_page', 20))
 # 多代理参数
 GH_PROXIES = list(LIVE_CFG.get('proxies') or [])
 JSD_HOSTS = list(LIVE_CFG.get('jsdelivr_hosts') or [])
-PER_CANDIDATE_TO = int(LIVE_CFG.get('per_candidate_timeout', 8))   # 单代理/候选超时
+PER_CANDIDATE_TO = int(LIVE_CFG.get('per_candidate_timeout', 5))   # 单代理/候选超时（秒）
 CONNECT_TIMEOUT = int(LIVE_CFG.get('connect_timeout', 3))          # 连接阶段超时
 MAX_CANDIDATES = int(LIVE_CFG.get('max_candidates', 4))            # 单源最多试几种方式
 
@@ -107,6 +130,8 @@ _EXTINF = re.compile(
 _TV = re.compile(r'(?:^|[\s,])tvg-([a-zA-Z0-9_-]+)="([^"]*)"')
 _NAME = re.compile(r'tvg-name="([^"]*)"')
 _EMOJI = re.compile(r'[\U00010000-\U0010ffff\U00002600-\U000027BF\U0001F300-\U0001FAFF]')
+# 脏数据过滤：tvg-id / 频道名 里出现「看起来像日期或乱码」的，直接丢弃
+_JUNK_NAME = re.compile(r'\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}')
 
 
 # ── 工具 ──
@@ -297,14 +322,6 @@ async def discover_vod(session):
     return list(urls)[:MAX_VOD * 3]
 
 
-async def discover_live(_session):
-    """直播源地址统一从 live.urls 读取；缺失时给出明确告警而非静默返回空"""
-    urls = list(LIVE_CFG.get('urls') or [])
-    if not urls:
-        print("⚠️ config.yaml 的 live.urls 未配置，直播源将为空")
-    return urls
-
-
 async def probe_vod(session, url, bl):
     if url in bl:
         return None
@@ -385,6 +402,10 @@ def parse_playlist(text):
                 name = m.group(1).strip()
         if not name:
             continue
+        # 脏数据过滤：tvg-id / 频道名 长得不像频道（日期串、纯数字等）
+        if _JUNK_NAME.search(name):
+            continue
+
         attrs = {k.lower(): v.strip() for k, v in _TV.findall(l)}
         group = attrs.get('group-title', '').strip()
         if group:
@@ -397,6 +418,34 @@ def parse_playlist(text):
             'group': group or '',
         })
     return chs
+
+
+async def discover_live(_session):
+    """直播源分三组（见 config.yaml）：
+      urls_static    —— 无需鉴权的固定直链，每次都抓取，享有官方源清晰度加分
+      urls_static_4k —— 静态源里「可能出 4K」的（河南系 / 湖南系等），不享受加分，
+                        推迟到第 3 轮与刷新源同场竞争，保留拿到 4K 的机会
+      urls_refresh   —— 带签名/鉴权的源，会过期；只在缓存缺失或强制刷新时抓取，
+                        命中过期后不再作为静态源写入，避免产出死链
+    返回 [(url, is_static, is_4k_candidate), ...]
+    """
+    static = list(LIVE_CFG.get('urls_static') or [])
+    static_4k = list(LIVE_CFG.get('urls_static_4k') or [])
+    refresh = list(LIVE_CFG.get('urls_refresh') or [])
+    force = os.environ.get('FORCE_REFRESH', '').lower() in ('1', 'true', 'yes')
+
+    if not static and not static_4k and not refresh:
+        print("⚠️ config.yaml 的 live.urls_static / urls_static_4k / urls_refresh 均未配置，直播源将为空")
+        return []
+
+    urls = [(u, True, False) for u in static]          # (url, is_static, is_4k_candidate)
+    urls += [(u, False, True) for u in static_4k]      # 4K 候选组：不带 _static 标记
+    if force or not refresh:
+        # 强制刷新或缓存为空时，才抓取需刷新源
+        urls += [(u, False, False) for u in refresh]
+    else:
+        print(f"    ℹ️ 跳过 {len(refresh)} 个需刷新源（缓存有效；FORCE_REFRESH=1 可强制）")
+    return urls
 
 
 async def probe_live_res(url):
@@ -417,7 +466,15 @@ async def probe_live_res(url):
     return None
 
 
-async def score_live(ch, session, bl):
+async def score_live(ch, session, bl, stability_map=None):
+    """探测单条线路并打分。
+    - 黑名单直接跳过
+    - HEAD 必须 200/206/302
+    - ffprobe 分辨率必须 ≥ MIN_RESOLUTION
+    - 清晰度分档：2160→100 / 1080→80 / 720→60 / 480→30
+    - 静态源（urls_static）清晰度 +STATIC_RES_BONUS 分，上限 100
+    - 稳定性取历史成功率（无历史按中性 0.5）
+    """
     if ch['url'] in bl:
         return None
     d = None
@@ -437,56 +494,162 @@ async def score_live(ch, session, bl):
         record_live_probe(ch['url'], ch['name'], 'fail', d)
         return None
 
-    sc = {2160: 100, 1080: 80, 720: 60}.get(res, 30)
-    # 权重已归一化，保证总和为 1
-    score = (sc * NW['resolution']
+    # 清晰度分档
+    res_score = {2160: 100, 1080: 80, 720: 60}.get(res, 30)
+    # 静态源（官方/长期固定直链）享有官方源清晰度加分，最高不超 100
+    # 注意：urls_static_4k 组不带 _static 标记，不享受此加分
+    if ch.get('_static'):
+        res_score = min(100, res_score + STATIC_RES_BONUS)
+    # 稳定性：从历史成功率取，无记录则为中性 0.5（新库首次跑的 URL 均无历史）
+    stab = (stability_map or {}).get(ch['url'])
+    if stab is None:
+        stab = 0.5
+    stab_score = stab * 100
+
+    score = (res_score * NW['resolution']
              + 80 * NW['speed']
              + max(0, 100 - d * 10) * NW['delay']
-             + 100 * NW['stability'])
-    record_live_probe(ch['url'], ch['name'], 'ok', d, res, 0.5, score)
-    return {**ch, 'score': round(score, 1)}
+             + stab_score * NW['stability'])
+    record_live_probe(ch['url'], ch['name'], 'ok', d, res, round(stab, 2), round(score, 1))
+    return {**ch, 'score': round(score, 1), '_res': res}
 
 
-async def aggregate_live(urls, repo_prefix):
+async def _fetch_source(sess, u, is_static, is_4k, idx):
+    """抓取单个源并给每条线路打上来源标记，返回频道列表"""
+    label = u.rsplit('/', 1)[-1].split('?')[0] or u[:40]
+    tag = "[静态]" if is_static else ("[4K候选]" if is_4k else "[刷新]")
+    text = await fetch_text_any(sess, u, label=label)
+    if not text:
+        return []
+    got = parse_playlist(text)
+    for ch in got:
+        ch['_src_order'] = idx
+        ch['_static'] = bool(is_static)     # 4K 候选组此处为 False，不享受静态源加分
+        ch['_4k_candidate'] = bool(is_4k)
+    print(f"    └ {tag} 解析到 {len(got)} 路 (源序 {idx})")
+    return got
+
+
+def _build_stability_map(chs):
+    """从数据库统计每个 URL 近 STABILITY_WINDOW 次探测的成功率。
+
+    live_history 已改为「追加写入」结构（每次探测新增一行，不再覆盖），
+    因此这里取到的确实是该 URL 的最近 N 次真实实测结果，而非单点。
+    返回 {url: 0.0~1.0}，无记录时返回 None（调用方按中性 0.5 处理）。
+    """
+    from database import get_stability
+    urls = {c['url'] for c in chs}
+    out = {}
+    for u in urls:
+        stab = get_stability(u, STABILITY_WINDOW)
+        out[u] = stab  # None 表示无历史，由 score_live 统一按 0.5 处理
+    return out
+
+
+def _is_round_satisfied(chs, min_res, min_stab):
+    """某频道是否满足「跳过」条件：至少有一路 ≥ min_res 且 稳定性 ≥ min_stab"""
+    for c in chs:
+        res = c.get('_res') or 0
+        stab = c.get('_stab') if c.get('_stab') is not None else 0.0
+        if res >= min_res and stab >= min_stab:
+            return True
+    return False
+
+
+async def _probe_channel_group(key, chs, session, bl, stability_map, round_label):
+    """对某个频道的候选线路做探测，返回 [(ch, valid_record_or_None), ...]"""
+    results = []
+    for c in chs[:CANDIDATES_PER_CHANNEL]:
+        rec = await score_live(c, session, bl, stability_map)
+        results.append(rec)
+    valid = [r for r in results if r]
+    print(f"    {round_label} {key}: {len(valid)}/{len(chs[:CANDIDATES_PER_CHANNEL])} 路达标")
+    return valid
+
+
+async def aggregate_live(url_pairs, repo_prefix):
+    # ── 第 0 步：抓源 ──
     all_ch = []
     async with aiohttp.ClientSession() as s:
-        for u in urls:
-            label = u.rsplit('/', 1)[-1].split('?')[0] or u[:40]
-            text = await fetch_text_any(s, u, label=label)
-            if text:
-                got = parse_playlist(text)
-                all_ch.extend(got)
-                print(f"    └ 解析到 {len(got)} 路")
+        for idx, item in enumerate(url_pairs):
+            if isinstance(item, tuple):
+                if len(item) == 3:
+                    u, is_static, is_4k = item
+                else:
+                    u, is_static, is_4k = item[0], item[1], False
+            else:
+                u, is_static, is_4k = item, True, False
+            got = await _fetch_source(s, u, is_static, is_4k, idx)
+            all_ch.extend(got)
 
     if not all_ch:
         print("⚠️ 未解析到任何直播频道")
         return '', '', 0, 0
 
+    # ── 归一化合并同名频道 ──
     groups = {}
     for ch in all_ch:
-        # 归一化 tvg-id，保证跨源同名频道能合并
         key = normalize_tvg_id(ch.get('tvg_id') or ch['name'])
         if not key:
             continue
         groups.setdefault(key, []).append(ch)
-
     groups = dict(sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)[:MAX_LIVE_CH])
 
+    stability_map = _build_stability_map(all_ch)
     bl = get_blacklist('live_history')
-    async with aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(limit=PROBE_CONCURRENCY)
-    ) as s:
+
+    skipped_4k = skipped_hd = 0
+    final = {}          # key -> [线路...]
+
+    connector = aiohttp.TCPConnector(limit=PROBE_CONCURRENCY)
+
+    async with aiohttp.ClientSession(connector=connector) as s:
+        # ── 第 1 轮：只探静态源中的 4K ──
+        print(f"\n🔍 第 1 轮探测：静态源 4K（达标线 {MIN_STATIC_4K}p，稳定性≥{MIN_STABILITY_EFFECTIVE}）")
         for k, chs in groups.items():
-            results = await asyncio.gather(*[score_live(c, s, bl) for c in chs[:15]])
-            groups[k] = sorted(
-                [r for r in results if r],
-                key=lambda x: x['score'], reverse=True,
-            )[:URLS_PER_CHANNEL]
+            static_4k_chs = [c for c in chs if c.get('_static')]
+            if not static_4k_chs:
+                continue
+            valid = await _probe_channel_group(k, static_4k_chs, s, bl, stability_map, "[R1]")
+            for r in valid:
+                r['_stab'] = stability_map.get(r['url']) or 0.0
+            if valid and STATIC_4K_SKIP and _is_round_satisfied(valid, MIN_STATIC_4K, MIN_STABILITY_EFFECTIVE):
+                final[k] = valid
+                skipped_4k += 1
 
+        # ── 第 2 轮：只探静态源中的 1080p ──
+        print(f"\n🔍 第 2 轮探测：静态源 1080p（达标线 {MIN_STATIC_HD}p，稳定性≥{MIN_STABILITY_EFFECTIVE}）")
+        for k, chs in groups.items():
+            if k in final:
+                continue
+            static_chs = [c for c in chs if c.get('_static')]
+            if not static_chs:
+                continue
+            valid = await _probe_channel_group(k, static_chs, s, bl, stability_map, "[R2]")
+            for r in valid:
+                r['_stab'] = stability_map.get(r['url']) or 0.0
+            if valid and STATIC_HD_SKIP and _is_round_satisfied(valid, MIN_STATIC_HD, MIN_STABILITY_EFFECTIVE):
+                final[k] = valid
+                skipped_hd += 1
+
+        # ── 第 3 轮：静态源剩余 + urls_static_4k + 刷新源，全量探测 ──
+        print(f"\n🔍 第 3 轮探测：静态源剩余 + 4K 候选 + 刷新源（全量，按分数补全到 {URLS_PER_CHANNEL} 路）")
+        for k, chs in groups.items():
+            if k in final:
+                continue
+            # 第 3 轮不做来源限制，所有线路（静态剩余 + 4K 候选 + 刷新源）同场竞争
+            valid = await _probe_channel_group(k, chs, s, bl, stability_map, "[R3]")
+            for r in valid:
+                r['_stab'] = stability_map.get(r['url']) or 0.0
+            # 排序：清晰度分(已含静态加分) 降序 → 来源顺序优先
+            valid.sort(key=lambda x: (x['score'], -x.get('_src_order', 0)), reverse=True)
+            final[k] = valid[:URLS_PER_CHANNEL]
+
+    # ── 统一输出 ──
     epg = f"{repo_prefix}/epg.xml"
-    txt, m3u = [], [f'#EXTM3U x-tvg-url="{epg}"']
+    txt, m3u = [], ['#EXTM3U x-tvg-url="%s"' % epg]
 
-    for chs in groups.values():
+    for k, chs in final.items():
         if not chs:
             continue
         n = chs[0]['name']
@@ -501,7 +664,9 @@ async def aggregate_live(urls, repo_prefix):
             )
             m3u.append(c['url'])
 
-    return '\n'.join(txt), '\n'.join(m3u), len(groups), sum(len(v) for v in groups.values())
+    print(f"\n✅ 三轮探测完成：第1轮跳过 {skipped_4k} 频道，第2轮跳过 {skipped_hd} 频道，"
+          f"第3轮补全 {len(groups) - skipped_4k - skipped_hd} 频道")
+    return '\n'.join(txt), '\n'.join(m3u), len(final), sum(len(v) for v in final.values())
 
 
 # ── 主 ──
