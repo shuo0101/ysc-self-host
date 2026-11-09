@@ -34,7 +34,7 @@ jobs:
       - name: 执行聚合
         env:
           FORCE_REFRESH: ${{ github.event.inputs.force_refresh || '0' }}
-        run: python scripts/aggregator.py --mode live
+        run: python aggregator.py --mode live
 
       - name: 提交并推送
         run: |
