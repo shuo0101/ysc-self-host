@@ -1,0 +1,91 @@
+name: 每日点播源更新
+
+on:
+  schedule:
+    - cron: '0 19 */3 * *'   # UTC 19:00 = 北京时间次日 03:00，每 3 天一次，与直播源错峰
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '强制全量更新（忽略时间戳间隔）'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 检查时间戳是否需要更新
+        id: ts
+        run: |
+          # 上次成功执行的时间戳存在根目录的隐藏文件 .vod_last_update 中
+          MARKER=".vod_last_update"
+          INTERVAL=259200   # 与上次成功执行间隔不足 3 天（259200s）则跳过
+          need_update="true"
+
+          if [ -f "$MARKER" ] && [ "${{ github.event.inputs.force }}" != "true" ]; then
+            last=$(cat "$MARKER" 2>/dev/null || echo 0)
+            now=$(date +%s)
+            if [ $((now - last)) -lt "$INTERVAL" ]; then
+              need_update="false"
+              echo "距上次成功执行不足 3 天（$(( (now - last) / 3600 ))h），跳过本次聚合"
+            fi
+          fi
+
+          echo "need_update=$need_update" >> $GITHUB_OUTPUT
+
+      - name: 执行聚合
+        if: steps.ts.outputs.need_update == 'true'
+        run: python aggregator.py --vod
+
+      - name: 记录本次执行时间
+        if: steps.ts.outputs.need_update == 'true'
+        run: |
+          # 聚合成功后才更新时间戳，确保失败不刷新间隔
+          date +%s > .vod_last_update
+          git add .vod_last_update
+
+      - name: 提交并推送
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          [ -d output ] && git add output/ || true
+          # 时间戳文件必须在 commit 覆盖范围内：无论聚合是否产生变更都提交，
+          # 保证 .vod_last_update 随每次成功执行推进，下一次 cron 能正确计算间隔
+          [ -f .vod_last_update ] && git add .vod_last_update || true
+
+          if git diff --cached --quiet; then
+            git reset
+            echo "无变更，跳过提交"
+            exit 0
+          fi
+
+          git fetch origin "${GITHUB_REF_NAME}"
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
+            git rebase --abort || true
+            exit 0
+          fi
+
+          git commit -m "chore: auto update vod sources [skip ci]" && \
+          (git push origin "HEAD:${GITHUB_REF_NAME}" || \
+            (git fetch origin "${GITHUB_REF_NAME}" && \
+             git rebase "origin/${GITHUB_REF_NAME}" && \
+             git push origin "HEAD:${GITHUB_REF_NAME}"))
