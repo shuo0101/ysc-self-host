@@ -34,7 +34,7 @@ jobs:
       - name: 检查时间戳是否需要更新
         id: ts
         run: |
-          python scripts/aggregator_vod.py --check-ts --interval 3600 || echo "need_update=true" >> $GITHUB_OUTPUT
+          python aggregator_vod.py --check-ts --interval 3600 || echo "need_update=true" >> $GITHUB_OUTPUT
 
       - name: 执行聚合
         if: steps.ts.outputs.need_update == 'true' || github.event.inputs.force == 'true'
