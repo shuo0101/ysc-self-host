@@ -1,0 +1,69 @@
+name: 每日直播源更新
+
+on:
+  schedule:
+    - cron: '0 18 * * *'   # UTC 18:00 = 北京时间次日 02:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装 ffmpeg（系统包）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 执行聚合
+        env:
+          FORCE_REFRESH: ${{ github.event.inputs.force_refresh || '0' }}
+        run: python scripts/aggregator.py --mode live
+
+      - name: 提交并推送
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 清理过期缓存：12 小时以上未更新的视为失效
+          [ -d sources_cache ] && find sources_cache -name "*.m3u" -mmin +720 -delete || true
+
+          [ -d output ] && git add output/ || true
+          [ -d sources_cache ] && git add sources_cache/ || true
+
+          # 有变更继续，无变更则清空暂存区并退出（避免 rebase 时 index 脏）
+          if git diff --cached --quiet; then
+            git reset
+            echo "无变更，跳过提交"
+            exit 0
+          fi
+
+          # 先 fetch 再 rebase，避免与并发推送的工作流互相覆盖
+          git fetch origin "${GITHUB_REF_NAME}"
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
+            git rebase --abort || true
+            exit 0
+          fi
+
+          git commit -m "chore: auto update live sources [skip ci]" && \
+          (git push origin "HEAD:${GITHUB_REF_NAME}" || \
+            (git fetch origin "${GITHUB_REF_NAME}" && \
+             git rebase "origin/${GITHUB_REF_NAME}" && \
+             git push origin "HEAD:${GITHUB_REF_NAME}"))
