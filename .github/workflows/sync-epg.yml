@@ -1,0 +1,77 @@
+name: Sync EPG
+
+"on":
+  schedule:
+    # 北京时间 01:00，每天。放在直播源之前跑，让后续工作流拿到最新 EPG
+    - cron: '0 17 * * *'  # 北京时间 01:00，每天
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      # -f 让 HTTP 错误返回非 0，避免失败被静默吞掉
+      - name: Download EPG sources
+        run: |
+          mkdir -p output
+          curl -L --retry 3 --max-time 180 -f \
+            "https://cdn.jsdelivr.net/gh/BurningC4/Chinese-IPTV@master/guide.xml" \
+            -o output/epg.xml
+          curl -L --retry 3 --max-time 120 -f \
+            "https://live.fanmingming.com/e.xml" \
+            -o output/epg_fanmingming.xml
+          curl -L --retry 3 --max-time 120 -f \
+            "https://epg.112114.xyz/pp.xml" \
+            -o output/epg_112114.xml
+
+      - name: Generate EPG index
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import datetime
+          from pathlib import Path
+          idx = {'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'sources': []}
+          for f, n in [('epg.xml','主EPG'),('epg_fanmingming.xml','备用1'),('epg_112114.xml','备用2')]:
+              p = Path('output')/f
+              if p.exists() and p.stat().st_size > 1000:
+                  idx['sources'].append({'name': n, 'file': f, 'size_kb': round(p.stat().st_size/1024,1)})
+          if not idx['sources']:
+              print("❌ 无可用 EPG 源，终止提交"); raise SystemExit(1)
+          with open('output/epg_index.json','w') as fp:
+              json.dump(idx, fp, ensure_ascii=False, indent=2)
+          print(f"✅ 生成 {len(idx['sources'])} 个 EPG 源索引")
+          PY
+
+      - name: Commit & Push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          [ -d output ] && git add output/epg*.xml output/epg_index.json || true
+          git diff --cached --quiet && echo "无变更，跳过提交" && exit 0
+
+          # 先 fetch 再 rebase，避免与并发推送的工作流互相覆盖
+          git fetch origin "${GITHUB_REF_NAME}"
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
+            git rebase --abort || true
+            exit 0
+          fi
+
+          git commit -m "chore: sync EPG data [skip ci]" && \
+          (git push origin "HEAD:${GITHUB_REF_NAME}" || \
+            (git fetch origin "${GITHUB_REF_NAME}" && \
+             git rebase "origin/${GITHUB_REF_NAME}" && \
+             git push origin "HEAD:${GITHUB_REF_NAME}"))
