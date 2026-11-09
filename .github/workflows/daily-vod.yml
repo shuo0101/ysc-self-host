@@ -38,7 +38,7 @@ jobs:
 
       - name: 执行聚合
         if: steps.ts.outputs.need_update == 'true' || github.event.inputs.force == 'true'
-        run: python scripts/aggregator_vod.py
+        run: python aggregator_vod.py --vod
 
       - name: 提交并推送
         run: |
