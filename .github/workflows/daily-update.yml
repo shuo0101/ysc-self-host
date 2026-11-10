@@ -13,11 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -69,8 +69,10 @@ jobs:
             exit 0
           fi
 
-          # rebase 成功，恢复暂存内容
+          # rebase 成功，恢复暂存内容，并重新 add 被 stash 带走的产物
           git stash pop || true
+          [ -d output ] && git add output/ || true
+          [ -d sources_cache ] && git add sources_cache/ || true
 
           if git commit -m "chore: auto update live sources [skip ci]"; then
             if ! git push origin "HEAD:${GITHUB_REF_NAME}"; then
