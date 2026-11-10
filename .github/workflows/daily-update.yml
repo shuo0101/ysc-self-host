@@ -1,6 +1,6 @@
 name: 每日直播源更新
 
-on:
+'on':
   schedule:
     - cron: '0 18 * * *'   # UTC 18:00 = 北京时间次日 02:00
   workflow_dispatch:
@@ -13,11 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -47,23 +47,36 @@ jobs:
           [ -d output ] && git add output/ || true
           [ -d sources_cache ] && git add sources_cache/ || true
 
-          # 有变更继续，无变更则清空暂存区并退出（避免 rebase 时 index 脏）
+          # 无变更：清空暂存区并退出（必须先 reset 再 exit，避免 index 脏）
           if git diff --cached --quiet; then
             git reset
             echo "无变更，跳过提交"
             exit 0
           fi
 
-          # 先 fetch 再 rebase，避免与并发推送的工作流互相覆盖
+          # 有变更：先把暂存内容 stash 起来，保证 rebase 时 index 干净
           git fetch origin "${GITHUB_REF_NAME}"
-          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
-            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
-            git rebase --abort || true
+
+          if ! git stash push -u -m "pre-rebase-$(date +%s)"; then
+            echo "stash 失败，放弃本次提交"
             exit 0
           fi
 
-          git commit -m "chore: auto update live sources [skip ci]" && \
-          (git push origin "HEAD:${GITHUB_REF_NAME}" || \
-            (git fetch origin "${GITHUB_REF_NAME}" && \
-             git rebase "origin/${GITHUB_REF_NAME}" && \
-             git push origin "HEAD:${GITHUB_REF_NAME}"))
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
+            git rebase --abort || true
+            git stash pop || true
+            exit 0
+          fi
+
+          # rebase 成功，恢复暂存内容
+          git stash pop || true
+
+          if git commit -m "chore: auto update live sources [skip ci]"; then
+            if ! git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "首次 push 失败，重新 fetch + rebase 后重试"
+              git fetch origin "${GITHUB_REF_NAME}" && \
+              git rebase "origin/${GITHUB_REF_NAME}" && \
+              git push origin "HEAD:${GITHUB_REF_NAME}"
+            fi
+          fi
