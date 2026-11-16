@@ -7,6 +7,7 @@ EPG 节目单同步脚本
 - 解析失败时打印每个 URL 的失败原因，便于定位
 """
 import os
+import re
 import sys
 import gzip
 import json
