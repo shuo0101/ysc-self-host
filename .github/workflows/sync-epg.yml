@@ -1,12 +1,16 @@
 name: 每日 EPG 同步
 
-on:
+'on':
   schedule:
-    - cron: '0 17 * * *'   # UTC 17:00 = 北京时间次日 01:00，最先执行
+    - cron: '30 18 * * *'   # UTC 18:30 = 北京时间 02:30，排在 daily-update(02:00) 与 daily-vod(02:15) 之后
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: ${{ github.repository }}-repo-update
+  cancel-in-progress: false
 
 jobs:
   sync:
@@ -23,17 +27,42 @@ jobs:
 
       - name: 同步 EPG
         run: python epg_sync.py
+        continue-on-error: true
 
       - name: 提交并推送
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # 先 stash 掉所有未提交改动（含未跟踪文件），保证后续 rebase 时 index 干净
+          git stash push -u -m "auto-stash before rebase" || true
+
+          git fetch origin "${GITHUB_REF_NAME}"
+
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
+            git rebase --abort || true
+            git stash pop 2>/dev/null || true
+            exit 0
+          fi
+
+          # rebase 成功后恢复 stash 内容，再统一 add
+          git stash pop 2>/dev/null || true
           [ -d output ] && git add output/ || true
 
           if git diff --cached --quiet; then
-            git reset
             echo "无变更，跳过提交"
+            exit 0
+          fi
+
+          git commit -m "chore: auto sync epg [skip ci]" && \
+          (git push origin "HEAD:${GITHUB_REF_NAME}" || \
+            (git fetch origin "${GITHUB_REF_NAME}" && \
+             git rebase "origin/${GITHUB_REF_NAME}" && \
+             git push origin "HEAD:${GITHUB_REF_NAME}")) || {
+              echo "⚠️ push 失败，等待下次重试"
+              exit 0
+          }
             exit 0
           fi
 
