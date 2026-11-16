@@ -376,7 +376,7 @@ def main():
                     default=KEEP_UNMATCHED, help="保留未匹配的频道")
     args = ap.parse_args()
 
-    cutoff = datetime.now(timezone(tz=timedelta(hours=8))) - timedelta(days=1)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=args.days)
 
     LOG.info("=" * 60)
     LOG.info("EPG 同步开始")
