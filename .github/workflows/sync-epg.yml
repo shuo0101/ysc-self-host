@@ -22,7 +22,7 @@ jobs:
           python-version: '3.11'
 
       - name: 同步 EPG
-        run: python scripts/epg_sync.py
+        run: python epg_sync.py
 
       - name: 提交并推送
         run: |
