@@ -18,7 +18,8 @@ from xml.etree import ElementTree as ET
 
 OUTPUT_DIR = "output"
 CACHE_DIR = os.path.join(OUTPUT_DIR, "cache")
-EPG_OUT = os.path.join(OUTPUT_DIR, "epg.xml")
+EPG_XML_OUT = os.path.join(OUTPUT_DIR, "epg.xml")
+EPG_JSON_OUT = os.path.join(OUTPUT_DIR, "epg.json")
 CACHE_FILE = os.path.join(CACHE_DIR, "epg_last.json")
 
 PROXIES = [
@@ -226,6 +227,28 @@ def write_epg(channels, out_path):
     return True
 
 
+def write_epg_json(channels, out_path):
+    """生成 JSON 格式 EPG（与 epg.xml 内容一致，供需 JSON 的场景使用）"""
+    total = sum(len(v) for v in channels.values())
+    payload = {"channels": []}
+    for ch_name in sorted(channels.keys()):
+        progs = channels[ch_name]
+        payload["channels"].append({
+            "id": ch_name,
+            "name": ch_name,
+            "programs": [
+                {"start": p.get("start_raw", ""),
+                 "stop": p.get("stop_raw", ""),
+                 "title": p["title"]}
+                for p in progs
+            ],
+        })
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    log(f"✓ 已写入 {out_path}: {len(channels)} 频道, {total} 条节目")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description="EPG 节目单同步")
     parser.add_argument("--days", type=int, default=7, help="保留天数(本版本未启用过滤)")
@@ -262,8 +285,10 @@ def main():
     save_cache(merged)
 
     if not args.dry_run:
-        if not write_epg(merged, EPG_OUT):
-            log("⚠️ 未写入（节目单为空）")
+        if not write_epg(merged, EPG_XML_OUT):
+            log("⚠️ XML 未写入（节目单为空）")
+        else:
+            write_epg_json(merged, EPG_JSON_OUT)
     else:
         log(f"[dry-run] 共 {len(merged)} 频道, 不写文件")
 
