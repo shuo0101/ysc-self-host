@@ -1,0 +1,160 @@
+# ============================================================
+#  TVBox 影视仓 聚合配置
+#  github: shuo0101/ysc-self-host
+#  对应 aggregator.py v8.15
+# ============================================================
+# ── 台标基础地址 ──
+logo:
+  base_url: "https://live.fanmingming.com/tv"
+
+# ============================================================
+#  点播源
+# ============================================================
+vod:
+  timeout: 12              # 单源请求超时（秒）
+  concurrency: 100          # 并发连接数
+  min_json_size: 200       # 视为有效 JSON 的最小字节数
+  max_sources: 1500        # 最多保留的点播源数量
+  discover_per_page: 20    # GitHub Search 每页结果数
+
+# ============================================================
+#  直播源
+# ============================================================
+live:
+# ═══════════════════════════════════════════════════════════
+# 探测策略：一轮探测 · 缓存复用 · 国内源优先 · 分清晰度达标即停
+#
+#   每个频道只探测一次，候选线路按"国内源优先"排序，
+#   每档清晰度探测到配额数即停止该频道：
+#     4K×4 + 1080p×5 + 720p×3 = 12 条（晚高峰）
+#     4K×3 + 1080p×4 + 720p×2 = 9 条（白天）
+#   线路不足时用国内 720p 源补满到 urls_per_channel。
+# ═══════════════════════════════════════════════════════════
+
+  # ── 第 1 组：官方/长期静态源（无需鉴权，固定直链）──
+  urls_static:
+    # 浙江系（1080p）
+    - "https://ali-m-l.cztv.com/channels/lantian/channel002/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel003/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel004/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel006/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel007/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel008/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel010/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel011/1080p.m3u8"
+    - "https://ali-m-l.cztv.com/channels/lantian/channel012/1080p.m3u8"
+    # 北邮 IPTV（地方台）
+    - "http://ivi.bupt.edu.cn/hls/btv1.m3u8"
+    - "http://ivi.bupt.edu.cn/hls/gdhd.m3u8"
+    - "http://ivi.bupt.edu.cn/hls/qhtv.m3u8"
+    - "http://ivi.bupt.edu.cn/hls/jxtv.m3u8"
+    - "http://ivi.bupt.edu.cn/hls/tjtv.m3u8"
+    # 4K / 纯享
+    - "https://event.pull.hebtv.com:443/live/live101.m3u8"
+    - "https://livepull-tcms.sztv.com.cn/live/sz4Kpgm.m3u8"
+    # 省级官方 HLS（1080p）
+    - "https://test1.live.sdetv.com.cn/live/dianshizhibo/playlist.m3u8"
+    - "http://bp-resource-dfl.bestv.cn/155/3/video.m3u8"
+    # 港澳静态源
+    - "http://live4.tdm.com.mo:80/ch1/_definst_/ch1.live/playlist.m3u8"
+    - "http://zhibo.hkstv.tv/livestream/mutfysrq/playlist.m3u8"
+    # 当前活跃的公开聚合站
+    - "https://live.fanmingming.com/tv/m3u/ipv4.m3u"
+    - "https://live.fanmingming.com/tv/m3u/cctv.m3u"
+    - "https://gh-proxy.com/https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.m3u"
+    - "https://gh-proxy.com/https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/stable.m3u"
+    - "https://cdn.jsdelivr.net/gh/Lightconer/TVBox-Sources@main/output/live.txt"
+    - "https://cdn.jsdelivr.net/gh/Lightconer/TVBox-Sources@main/output/live.m3u"
+    - "https://iptv-org.github.io/iptv/countries/cn.m3u"
+    - "https://iptv-org.github.io/iptv/countries/hk.m3u"
+    - "https://iptv-org.github.io/iptv/categories/china.m3u"
+    # IPv6 兜底
+    - "https://live.fanmingming.com/tv/m3u/ipv6.m3u"
+    - "https://raw.githubusercontent.com/hwansong/ipv6tv/main/iptv6.m3u"
+
+  # ── 第 2 组：静态源里「可能出 4K」的 ──
+  urls_static_4k:
+    - "https://dxtx.hntv.tv/live/lypd.m3u8"
+    - "https://event.pull.hebtv.com/jishi/cp1.m3u8"
+    - "https://event.pull.hebtv.com/jishi/cp2.m3u8"
+
+  # ── 第 3 组：需刷新源（带签名/鉴权，会过期）──
+  urls_refresh:
+    - "https://dxtx.hntv.tv/live/lypd.m3u8"
+    - "https://event.pull.hebtv.com/jishi/cp1.m3u8"
+    - "https://event.pull.hebtv.com/jishi/cp2.m3u8"
+
+  # ── 清晰度配额：每频道各保留多少路 ──
+  # 晚高峰 4K×4 + 1080p×5 + 720p×3 = 12
+  # 白天   4K×3 + 1080p×4 + 720p×2 = 9
+  res_quotas:
+    2160: 4
+    1080: 5
+    720: 3
+
+  # ── 各清晰度达标即停阈值（每频道每档）──
+  quota_4k_limit: 4
+  quota_1080_limit: 5
+  quota_720_limit: 3
+
+  # ── 每频道线路数：白天 / 晚高峰 ──
+  urls_per_channel: 9          # 白天
+  urls_per_channel_peak: 12    # 晚高峰
+  peak_hours: [19, 20, 21, 22, 23]
+
+  # ── 国内源加分 / 海外源降权（缓解晚间卡顿）──
+  domestic_bonus: 15
+  overseas_penalty: -15
+
+  # ── 缓存（避免重复 ffprobe，TTL 内复用探测结果）──
+  use_cache: true
+  cache_ttl_seconds: 600        # 10 分钟
+  history_window: 20           # 取最近 20 次探测计算平均评分
+
+  # ── 探测参数 ──
+  db_path: "data/sources.db"
+  timeout: 8               # HEAD 探测超时（秒）
+  probe_timeout: 6         # ffprobe 探测超时（秒）
+  concurrency: 50          # 并发连接数
+  min_resolution: 720      # 最低分辨率，低于此值丢弃
+  max_channels: 1000       # 最多保留的频道数量
+  candidates_per_channel: 30  # 每频道最多送入探测的候选线路数
+  cache_dir: "sources_cache"
+  cache_ttl_hours: 12
+  fetch_timeout: 20        # 单次拉取超时（秒），直连 1 次 + 1 次重试
+  static_res_bonus: 5
+  stability_window: 10
+
+  # 以下参数已废弃，保留以避免旧配置报错
+  per_candidate_timeout: 8
+  connect_timeout: 4
+  max_candidates: 1
+  proxies: []
+  jsdelivr_hosts: []
+
+  # ── 排序权重 ──
+  sort_weights:
+    resolution: 0.45
+    speed: 0.15
+    delay: 0.15
+    stability: 0.25
+
+# ============================================================
+#  点播源发现
+# ============================================================
+discover:
+  vod_seeds:
+    # 用 jsdelivr CDN 代理（国内可访问）
+    - "https://cdn.jsdelivr.net/gh/jifeng250/tvbox-sources@main/urls.json"
+    - "https://cdn.jsdelivr.net/gh/wzh15802/tvbox@main/tv.json"
+
+# ============================================================
+#  电子节目单（EPG）
+#  本节为待对接状态，aggregator.py v8.15 不读此字段。
+#  EPG 抓取由 epg_sync.py 负责，源地址硬编码在 epg_sync.py 的常量里。
+# ============================================================
+epg:
+  primary: "https://cdn.jsdelivr.net/gh/BurningC4/Chinese-IPTV@master/guide.xml"
+  backups:
+    - "https://live.fanmingming.com/e.xml"
+    - "https://epg.112114.xyz/pp.xml"
