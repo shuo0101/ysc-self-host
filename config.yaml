@@ -94,7 +94,7 @@ live:
   min_static_4k: 2160
   static_hd_skip: true
   min_static_hd: 1080
-  min_stability_effective: 0.80
+  min_stability_effective: 0.50
   static_res_bonus: 5
 
   # ── 三轮每频道达标数（频道不限制）──
@@ -125,7 +125,7 @@ live:
   concurrency: 50          # 并发连接数
   min_resolution: 720      # 最低分辨率，低于此值丢弃
   max_channels: 1000       # 最多保留的频道数量
-  candidates_per_channel: 15  # 每频道最多送入探测的候选线路数
+  candidates_per_channel: 30  # 每频道最多送入探测的候选线路数
   cache_dir: "sources_cache"   # 缓存目录
   cache_ttl_hours: 12          # 缓存有效期（小时）
   fetch_timeout: 20            # 单次拉取超时（秒），直连 1 次 + 1 次重试
