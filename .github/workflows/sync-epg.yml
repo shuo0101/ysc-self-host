@@ -2,78 +2,119 @@ name: 每日 EPG 同步
 
 on:
   schedule:
-    - cron: '30 18 * * *'   # UTC 18:30 = 北京时间 02:30
+    - cron: '30 18 * * *'   # 北京时间 02:30
   workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency:
-  group: ${{ github.repository }}-repo-update
-  cancel-in-progress: false
-
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-node@v4
         with:
-          python-version: '3.11'
+          node-version: '20'
 
-      - name: 安装依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install aiohttp aiofiles pyyaml
-
-      - name: 缓存 EPG 抓取缓存
+      - name: 缓存 npm 依赖
         uses: actions/cache@v4
         with:
-          path: epg_cache
-          key: ${{ runner.os }}-epg-${{ github.run_number }}
-          restore-keys: |
-            ${{ runner.os }}-epg-
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-npm-
 
-      - name: 同步 EPG
-        run: python epg_sync.py
-        continue-on-error: true
-        env:
-          EPG_DIR: output
-          EPG_CACHE_DIR: epg_cache
-          MAX_AGE_DAYS: 14
-          EPG_FETCH_TIMEOUT: 60
-          EPG_CONCURRENCY: 8
+      - name: 抓取 iptv-org EPG
+        run: |
+          mkdir -p epg_build
+          cd epg_build
+          if [ ! -d ".git" ]; then
+            git clone --depth 1 https://github.com/iptv-org/epg.git .
+          else
+            git pull --ff-only
+          fi
+          npm ci
+          # 只抓中国频道，速度快；去掉 --channels 则抓全球
+          npm run grab -- --channels=channels/cn.csv --gzip
+          ls -lh output/ || ls -lh siteconfigs/ | head -20
+
+      - name: 合并 XMLTV
+        run: |
+          cd epg_build
+          # 产物路径可能不同，探测一下
+          if [ -d output ]; then
+            SRC="output"
+          else
+            SRC="siteconfigs"
+          fi
+          # 合并所有 xml 为一个 epg.xml（gzip 先解压）
+          python3 - <<'PY'
+          import glob, gzip, os, sys
+          base = "output" if os.path.isdir("output") else "siteconfigs"
+          files = glob.glob(f"{base}/**/*.xml*", recursive=True)
+          parts = []
+          for f in files:
+              if f.endswith(".gz"):
+                  with gzip.open(f, "rt", encoding="utf-8", errors="ignore") as fh:
+                      parts.append(fh.read())
+              else:
+                  parts.append(open(f, encoding="utf-8", errors="ignore").read())
+          # 提取各文件的 <channel>/<programme> 拼成完整 xmltv
+          import re
+          channels, programmes = [], []
+          for p in parts:
+              channels += re.findall(r"<channel\b[^>]*>.*?</channel>", p, re.S)
+              programmes += re.findall(r"<programme\b[^>]*>.*?</programme>", p, re.S)
+          xml = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE tv SYSTEM "xmltv.dtd">\n<tv generator-info-name="iptv-org/epg">\n'
+          xml += "\n".join(channels) + "\n" + "\n".join(programmes) + "\n</tv>\n"
+          out = os.path.join("..", "output", "epg.xml")
+          os.makedirs(os.path.dirname(out), exist_ok=True)
+          with open(out, "w", encoding="utf-8") as fh:
+              fh.write(xml)
+          print(f"✓ 合并完成：{len(channels)} 频道, {len(programmes)} 节目 → {out}")
+          PY
+
+      - name: 同步到 output
+        run: |
+          cp epg_build/output/epg.xml output/epg.xml 2>/dev/null || true
+          python3 - <<'PY'
+          import json, re, os
+          from datetime import datetime, timedelta, timezone
+          TZ8 = timezone(timedelta(hours=8))
+          p = "output/epg.xml"
+          if not os.path.exists(p):
+              print("⚠️ epg.xml 未生成"); sys.exit(1)
+          txt = open(p, encoding="utf-8", errors="ignore").read()
+          ch = re.findall(r'<channel id="([^"]+)"', txt)
+          progs = re.findall(r'<programme channel="([^"]+)" start="(\d{14})', txt)
+          today = datetime.now(TZ8).strftime("%Y%m%d")
+          idx = {}
+          for cid, st in progs:
+              if st.startswith(today):
+                  idx.setdefault(cid, []).append({"s": st, "t": ""})
+          names = {}
+          for m in re.finditer(r'<channel id="([^"]+)">.*?<display-name[^>]*>([^<]+)</display-name>', txt, re.S):
+              names[m.group(1)] = m.group(2)
+          idx_json = {names.get(c, c): [{"s": x["s"]} for x in v[:12]] for c, v in idx.items()}
+          with open("output/epg_index.json", "w", encoding="utf-8") as fh:
+              json.dump(idx_json, fh, ensure_ascii=False, separators=(",", ":"))
+          print(f"✓ output/epg.xml: {len(ch)} 频道, {len(progs)} 节目")
+          print(f"✓ output/epg_index.json: {len(idx_json)} 频道今日节目")
+          PY
 
       - name: 提交并推送
         run: |
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # 先 stash 掉所有未提交改动（含未跟踪文件），保证后续 rebase 时 index 干净
-          git stash push -u -m "auto-stash before rebase" || true
+          git stash push -u -m "auto-stash" || true
           git fetch origin "${GITHUB_REF_NAME}"
-          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
-            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
-            git rebase --abort || true
-            git stash pop 2>/dev/null || true
-            exit 0
-          fi
-          # rebase 成功后恢复 stash 内容，再统一 add
+          git rebase "origin/${GITHUB_REF_NAME}" || (git rebase --abort && exit 0)
           git stash pop 2>/dev/null || true
-          [ -d output ] && git add output/ || true
-          [ -d epg_cache ] && git add epg_cache/ || true
-          if git diff --cached --quiet; then
-            echo "无变更，跳过提交"
-            exit 0
-          fi
-          git commit -m "chore: auto sync epg [skip ci]" && \
-          (git push origin "HEAD:${GITHUB_REF_NAME}" || \
-          (git fetch origin "${GITHUB_REF_NAME}" && \
-          git rebase "origin/${GITHUB_REF_NAME}" && \
-          git push origin "HEAD:${GITHUB_REF_NAME}")) || {
-            echo "⚠️ push 失败，等待下次重试"
-            exit 0
-          }
+          [ -f output/epg.xml ] && git add output/epg.xml
+          [ -f output/epg_index.json ] && git add output/epg_index.json
+          if git diff --cached --quiet; then echo "无变更"; exit 0; fi
+          git commit -m "chore: auto sync epg [skip ci]" && git push origin "HEAD:${GITHUB_REF_NAME}"
