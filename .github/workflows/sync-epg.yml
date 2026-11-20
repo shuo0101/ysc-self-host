@@ -1,29 +1,128 @@
-# .github/workflows/probe-baoer.yml（一次性，跑完可删）
-name: 测 baoer 可达性
-'on': workflow_dispatch
+name: 每日 EPG 同步
+
+'on':
+  schedule:
+    - cron: '40 18 * * *'   # 北京时间 02:40（站点凌晨 00:30 更新，错后抓取确保已更新）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
 jobs:
-  probe:
+  sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - run: |
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 抓取 baoer.org.cn EPG
+        run: |
+          mkdir -p output
           python3 - <<'EOF'
-          import urllib.request, ssl, gzip, re
+          import urllib.request, ssl, gzip, re, sys
           from datetime import datetime, timedelta, timezone
           ctx = ssl.create_default_context()
-          ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE
+          ctx.check_hostname = False
+          ctx.verify_mode = ssl.CERT_NONE
           TZ8 = timezone(timedelta(hours=8))
           now = datetime.now(TZ8).strftime('%Y%m%d')
-          for url in ["https://baoer.org.cn/e.xml.gz","https://baoer.org.cn/e.xml",
-                      "https://baoer.org.cn/x.xml.gz","https://baoer.org.cn/x.xml"]:
+          headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+          def fetch(url, label):
               try:
-                  req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-                  with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
+                  req = urllib.request.Request(url, headers=headers)
+                  with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
                       raw = r.read()
-                  text = gzip.decompress(raw).decode('utf-8','ignore') if url.endswith('.gz') else raw.decode('utf-8','ignore')
+                  if url.endswith('.gz'):
+                      text = gzip.decompress(raw).decode('utf-8', 'ignore')
+                  else:
+                      text = raw.decode('utf-8', 'ignore')
+                  ch = len(set(re.findall(r'channel id="([^"]+)"', text)))
                   dates = re.findall(r'start="(\d{14})', text)
                   latest = max(dates)[:8] if dates else "无"
-                  ch = len(set(re.findall(r'channel id="([^"]+)"', text)))
-                  print(f"✅ {url:<34} {len(text):>9}字节 {ch:>4}频道 {len(dates):>5}节目 最新{latest} {'🟢' if latest>=now else '🔴'}")
+                  verdict = "🟢新鲜" if latest >= now else "🔴过期"
+                  print(f"✅ {label:<14} {len(text):>9}字节 {ch:>4}频道 {len(dates):>5}节目 最新{latest} {verdict}")
+                  return text
               except Exception as e:
-                  print(f"❌ {url:<34} {str(e)[:36]}")
+                  print(f"❌ {label:<14} {str(e)[:40]}")
+                  return None
+
+          merged = {}
+          for url, label in [
+              ("https://baoer.org.cn/e.xml.gz", "baoer 当天"),
+              ("https://baoer.org.cn/e.xml",     "baoer 当天-xml"),
+          ]:
+              t = fetch(url, label)
+              if t:
+                  ingest(t, merged); break
+          for url, label in [
+              ("https://baoer.org.cn/x.xml.gz", "baoer 7天"),
+              ("https://baoer.org.cn/x.xml",     "baoer 7天-xml"),
+          ]:
+              t = fetch(url, label)
+              if t:
+                  ingest(t, merged); break
+
+          def ingest(text, store):
+              for m in re.finditer(r'<channel id="([^"]+)">(.*?)</channel>', text, re.S):
+                  cid, body = m.group(1), m.group(2)
+                  store.setdefault(cid, {})
+                  dn = re.search(r'<display-name[^>]*>([^<]+)</display-name>', body)
+                  if dn: store[cid]['name'] = dn.group(1)
+              for m in re.finditer(r'<programme channel="([^"]+)" start="(\d{14})"[^>]*>(.*?)</programme>', text, re.S):
+                  cid, start, body = m.group(1), m.group(2), m.group(3)
+                  store.setdefault(cid, {}).setdefault('progs', [])
+                  stop = re.search(r'stop="(\d{14})"', m.group(0))
+                  title = re.search(r'<title[^>]*>([^<]+)</title>', body)
+                  store[cid]['progs'].append({
+                      "start": start,
+                      "stop": stop.group(1) if stop else "",
+                      "title": title.group(1) if title else "",
+                  })
+
+          # 兜底：baoer 失败时用 Guovin gd
+          if not merged:
+              print("⚠️ baoer 全部失败，尝试 Guovin gd 兜底")
+              t = fetch("https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/epg/epg.xml", "Guovin gd")
+              if t:
+                  ingest(t, merged)
+
+          if not merged:
+              print("❌ 所有源均失败，退出")
+              sys.exit(1)
+
+          # 写 epg.xml（标准 XMLTV）
+          import xml.etree.ElementTree as ET
+          tv = ET.Element("tv", attrib={"generator-info-name": "baoer.org.cn + guovin"})
+          for cid, info in merged.items():
+              ch = ET.SubElement(tv, "channel", {"id": cid})
+              dn = ET.SubElement(ch, "display-name")
+              dn.text = info.get('name', cid)
+              for p in info.get('progs', []):
+                  pe = ET.SubElement(tv, "programme", {"channel": cid})
+                  if p.get('start'): pe.set("start", p['start'])
+                  if p.get('stop'): pe.set("stop", p['stop'])
+                  te = ET.SubElement(pe, "title")
+                  te.text = p['title']
+          tree = ET.ElementTree(tv)
+          tree.write("output/epg.xml", encoding="UTF-8", xml_declaration=True)
+          total_prog = sum(len(v.get('progs', [])) for v in merged.values())
+          print(f"\n✓ output/epg.xml: {len(merged)} 频道, {total_prog} 节目")
+
+          # 写 epg.json
+          import json
+          j = {cid: {"name": info.get('name', cid), "programs": info.get('progs', [])} for cid, info in merged.items()}
+          with open("output/epg.json", "w", encoding="utf-8") as f:
+              json.dump(j, f, ensure_ascii=False, separators=(",", ":"))
+          print(f"✓ output/epg.json: {len(j)} 频道")
           EOF
+
+      - name: 提交并推送
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add output/epg.xml output/epg.json 2>/dev/null || true
+          if git diff --cached --quiet; then echo "无变更"; exit 0; fi
+          git commit -m "chore: auto sync epg [skip ci]" && git push origin "HEAD:${GITHUB_REF_NAME}"
