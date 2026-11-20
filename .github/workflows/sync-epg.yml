@@ -1,6 +1,6 @@
 name: 每日 EPG 同步
 
-on:
+'on':
   schedule:
     - cron: '30 18 * * *'   # 北京时间 02:30
   workflow_dispatch:
