@@ -485,8 +485,27 @@ async def aggregate_vod(urls, epg_url):
 # ============================================================
 #  直播
 # ============================================================
-def parse_playlist(text):
-    chs, lines = [], text.strip().split('\n')
+def parse_playlist(text, default_group=''):
+    """解析直播清单，自动识别两种格式：
+       1) M3U：#EXTINF 行 + 下一行 URL
+       2) TXT：纯文本，每行 "频道名,URL" 且用 ",#genre#" 行分隔分组
+    """
+    if not text:
+        return []
+    text = text.lstrip('\ufeff').strip()
+    lines = text.split('\n')
+
+    # ── 格式判定：是否含 #EXTINF ──
+    has_extinf = any(l.startswith('#EXTINF:') for l in lines[:200])
+
+    if has_extinf:
+        return _parse_m3u(lines, default_group)
+
+    return _parse_txt(lines, default_group)
+
+
+def _parse_m3u(lines, default_group=''):
+    chs = []
     for i, l in enumerate(lines):
         if not l.startswith('#EXTINF:'):
             continue
@@ -513,13 +532,59 @@ def parse_playlist(text):
             continue
 
         attrs = {k.lower(): v.strip() for k, v in _TV.findall(l)}
-        group = attrs.get('group-title', '').strip()
+        group = attrs.get('group-title', '').strip() or default_group
         if group:
             group = _EMOJI.sub('', group).strip()
         chs.append({
             'name': name, 'url': url,
             'tvg_id': attrs.get('id', '').strip() or '',
             'logo': attrs.get('logo', '').strip() or '',
+            'group': group or '',
+        })
+    return chs
+
+
+def _parse_txt(lines, default_group=''):
+    """解析 TXT 格式：
+       分组行：    "...内容...,#genre#"（逗号在 genre 前）
+       频道行：    "频道名,http://..."
+       无效行（说明/注释）跳过
+    """
+    chs = []
+    group = default_group
+    for l in lines:
+        l = l.strip()
+        if not l:
+            continue
+        # 分组行
+        if l.endswith('#genre#'):
+            g = l[:-len('#genre#')].strip()
+            # 去掉行首遗留的说明片段（如 "央视官源,"）
+            if g.endswith(','):
+                g = g[:-1].strip()
+            if g:
+                group = g
+            continue
+        # 只处理含单个逗号分隔的 名称,URL 行
+        if ',' not in l:
+            continue
+        name, url = l.split(',', 1)
+        name, url = name.strip(), url.strip()
+        if not name or not url:
+            continue
+        # URL 只取第一个备选（分号/逗号分隔的多个地址取首个）
+        url = url.split(';')[0].split(',')[0].strip()
+        if not url.startswith(('http://', 'https://')):
+            continue
+        if url.endswith('.php'):
+            continue
+        if any(p in url for p in _JUNK_PATTERNS):
+            continue
+        if _JUNK_NAME.search(name):
+            continue
+        chs.append({
+            'name': name, 'url': url,
+            'tvg_id': '', 'logo': '',
             'group': group or '',
         })
     return chs
@@ -549,13 +614,26 @@ def is_domestic_url(url):
 
 
 async def _fetch_source(session, url, is_static, is_4k, idx):
-    """抓取单个源并解析成频道列表"""
+    """抓取单个源并解析成频道列表。
+    url 支持两种形式：
+      - http(s):// 远程地址，走 fetch_text_any（带缓存）
+      - 本地文件路径（含 inputs/ 本地源），直接读文件
+    """
     if is_static:
         label = f"静态源#{idx}"
     elif is_4k:
         label = f"4K源#{idx}"
     else:
         label = f"刷新源#{idx}"
+
+    # ── 本地文件（本地源/inputs/）──
+    if not url.startswith(('http://', 'https://')):
+        chs = _read_local_source(url, label)
+        for c in chs:
+            c['_static'] = is_static
+            c['_4k'] = is_4k
+        return chs
+
     text = await fetch_text_any(session, url, label)
     if not text:
         return []
@@ -567,6 +645,26 @@ async def _fetch_source(session, url, is_static, is_4k, idx):
     return chs
 
 
+def _read_local_source(path, label):
+    """读取本地直播源文件（TXT / M3U 自动识别），返回频道列表"""
+    p = Path(path)
+    if not p.is_absolute():
+        p = Path(__file__).parent / p
+    if not p.exists():
+        print(f"    ✗ {label} 本地文件不存在: {p}")
+        return []
+    try:
+        text = p.read_text(encoding='utf-8', errors='ignore')
+    except Exception as e:
+        print(f"    ✗ {label} 读取失败: {e}")
+        return []
+    chs = parse_playlist(text)
+    for c in chs:
+        c['_local'] = True
+    print(f"    📺 {label} 本地源 {p.name} 解析到 {len(chs)} 个频道")
+    return chs
+
+
 async def discover_live(_session):
     static = list(LIVE_CFG.get('urls_static') or [])
     static_4k = list(LIVE_CFG.get('urls_static_4k') or [])
@@ -574,8 +672,16 @@ async def discover_live(_session):
     zsdc = list(LIVE_CFG.get('urls_zsdc') or [])   # 成都/四川电信 IPTV（zsdc 单播源，配套回看+时移）
     force = os.environ.get('FORCE_REFRESH', '').lower() in ('1', 'true', 'yes')
 
-    if not static and not static_4k and not refresh and not zsdc:
-        print("⚠️ config.yaml 的 live.urls_static / urls_static_4k / urls_refresh / urls_zsdc 均未配置，直播源将为空")
+    # ── 本地源目录：自动扫描（默认 inputs/）──
+    # 支持的文件：.txt / .m3u / .m3u8
+    # 自动按文件名识别分组与类型：含 "4K" 或 "4k" → 走 4K 候选轮次；
+    # 含 "refresh" / "鉴权" / "签名" → 走需刷新轮次；其余按静态源处理
+    local_dir = LIVE_CFG.get('local_dir', 'inputs')
+    local_sources = _discover_local_sources(local_dir)
+
+    all_entries = static + static_4k + refresh + zsdc + local_sources
+    if not all_entries:
+        print("⚠️ config.yaml 的 live.urls_static / urls_static_4k / urls_refresh / urls_zsdc 均未配置，且本地源目录也为空，直播源将为空")
         return []
 
     urls = [(u, True, False) for u in static]
@@ -586,7 +692,49 @@ async def discover_live(_session):
         print(f"    ℹ️ 跳过 {len(refresh)} 个需刷新源（缓存有效；FORCE_REFRESH=1 可强制）")
     # zsdc 单播源作为静态源处理（固定直链），走国内源加分
     urls += [(u, True, False) for u in zsdc]
+    # ── 本地源 ──
+    for tag, path in local_sources:
+        is_4k = tag == '4k'
+        urls.append((path, True, is_4k))
     return urls
+
+
+def _discover_local_sources(local_dir):
+    """扫描本地源目录，返回 [(tag, path), ...]。
+    tag: 'static' | '4k' | 'refresh'
+    识别规则（按文件名，不区分大小写）：
+      - 含 4k/4K/8k/8K/ultra        → 4k
+      - 含 refresh/刷新/鉴权/签名/过期 → refresh
+      - 其余                              → static
+    忽略 hidden 文件与 README。
+    """
+    base = Path(local_dir)
+    if not base.is_absolute():
+        base = Path(__file__).parent / base
+    if not base.exists() or not base.is_dir():
+        return []
+
+    result = []
+    files = sorted(base.iterdir())
+    for f in files:
+        if not f.is_file():
+            continue
+        if f.name.startswith(('.', '_')) or f.name.upper().startswith('README'):
+            continue
+        if f.suffix.lower() not in ('.txt', '.m3u', '.m3u8'):
+            continue
+        name = f.stem.lower()
+        if any(k in name for k in ('4k', '8k', 'ultra', 'uhd')):
+            tag = '4k'
+        elif any(k in name for k in ('refresh', '刷新', '鉴权', '签名', '过期', 'token')):
+            tag = 'refresh'
+        else:
+            tag = 'static'
+        result.append((tag, str(f)))
+    print(f"    📂 本地源目录 {base}: 发现 {len(result)} 个源文件")
+    for tag, p in result:
+        print(f"       [{tag:7s}] {Path(p).name}")
+    return result
 
 
 async def probe_live_res(url):
