@@ -11,7 +11,7 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -19,7 +19,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: 缓存 npm 依赖
         uses: actions/cache@v4
@@ -28,7 +28,7 @@ jobs:
           key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
           restore-keys: ${{ runner.os }}-npm-
 
-      - name: 抓取 iptv-org EPG
+      - name: 抓取 iptv-org 全量 EPG
         run: |
           mkdir -p epg_build
           cd epg_build
@@ -38,71 +38,74 @@ jobs:
             git pull --ff-only
           fi
           npm ci
-          # 只抓中国频道，速度快；去掉 --channels 则抓全球
-          npm run grab -- --channels=channels/cn.csv --gzip
-          ls -lh output/ || ls -lh siteconfigs/ | head -20
+          node -r @swc-node/register scripts/commands/epg/grab.ts --gzip
+          echo "=== 产物 ==="
+          find . -name "*.xml" -o -name "*.xml.gz" 2>/dev/null | head -50
+          ls -lh output 2>/dev/null || true
 
-      - name: 合并 XMLTV
+      - name: 合并为单一 epg.xml
         run: |
           cd epg_build
-          # 产物路径可能不同，探测一下
-          if [ -d output ]; then
-            SRC="output"
-          else
-            SRC="siteconfigs"
-          fi
-          # 合并所有 xml 为一个 epg.xml（gzip 先解压）
           python3 - <<'PY'
-          import glob, gzip, os, sys
-          base = "output" if os.path.isdir("output") else "siteconfigs"
-          files = glob.glob(f"{base}/**/*.xml*", recursive=True)
-          parts = []
-          for f in files:
-              if f.endswith(".gz"):
-                  with gzip.open(f, "rt", encoding="utf-8", errors="ignore") as fh:
-                      parts.append(fh.read())
-              else:
-                  parts.append(open(f, encoding="utf-8", errors="ignore").read())
-          # 提取各文件的 <channel>/<programme> 拼成完整 xmltv
-          import re
+          import glob, gzip, os, re
+          files = glob.glob("output/**/*.xml*", recursive=True)
+          if not files:
+              files = glob.glob("siteconfigs/**/*.xml*", recursive=True)
+          print(f"找到 {len(files)} 个 XML 文件")
           channels, programmes = [], []
-          for p in parts:
-              channels += re.findall(r"<channel\b[^>]*>.*?</channel>", p, re.S)
-              programmes += re.findall(r"<programme\b[^>]*>.*?</programme>", p, re.S)
+          for f in files:
+              if os.path.getsize(f) < 100:
+                  continue
+              try:
+                  if f.endswith(".gz"):
+                      txt = gzip.open(f, "rt", encoding="utf-8", errors="ignore").read()
+                  else:
+                      txt = open(f, encoding="utf-8", errors="ignore").read()
+              except Exception as e:
+                  print(f"  跳过 {f}: {e}")
+                  continue
+              channels += re.findall(r"<channel\b[^>]*>.*?</channel>", txt, re.S)
+              programmes += re.findall(r"<programme\b[^>]*>.*?</programme>", txt, re.S)
+          # 去重 channel（同一频道可能多个文件都有声明）
+          seen, uniq = set(), []
+          for c in channels:
+              cid = re.search(r'id="([^"]+)"', c)
+              if cid and cid.group(1) not in seen:
+                  seen.add(cid.group(1)); uniq.append(c)
           xml = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE tv SYSTEM "xmltv.dtd">\n<tv generator-info-name="iptv-org/epg">\n'
-          xml += "\n".join(channels) + "\n" + "\n".join(programmes) + "\n</tv>\n"
+          xml += "\n".join(uniq) + "\n" + "\n".join(programmes) + "\n</tv>\n"
           out = os.path.join("..", "output", "epg.xml")
           os.makedirs(os.path.dirname(out), exist_ok=True)
           with open(out, "w", encoding="utf-8") as fh:
               fh.write(xml)
-          print(f"✓ 合并完成：{len(channels)} 频道, {len(programmes)} 节目 → {out}")
+          print(f"✓ 合并完成：{len(uniq)} 频道, {len(programmes)} 节目 → {out}")
           PY
 
-      - name: 同步到 output
+      - name: 生成 epg_index.json
         run: |
-          cp epg_build/output/epg.xml output/epg.xml 2>/dev/null || true
+          cd epg_build
           python3 - <<'PY'
-          import json, re, os
+          import json, re, os, sys
           from datetime import datetime, timedelta, timezone
           TZ8 = timezone(timedelta(hours=8))
-          p = "output/epg.xml"
+          p = os.path.join("..", "output", "epg.xml")
           if not os.path.exists(p):
               print("⚠️ epg.xml 未生成"); sys.exit(1)
           txt = open(p, encoding="utf-8", errors="ignore").read()
-          ch = re.findall(r'<channel id="([^"]+)"', txt)
-          progs = re.findall(r'<programme channel="([^"]+)" start="(\d{14})', txt)
+          names = {}
+          for m in re.finditer(r'<channel id="([^"]+)">.*?<display-name[^>]*>([^<]+)</display-name>', txt, re.S):
+              names[m.group(1)] = m.group(2)
+          progs = re.findall(r'<programme channel="([^"]+)" start="(\d{14})"', txt)
           today = datetime.now(TZ8).strftime("%Y%m%d")
           idx = {}
           for cid, st in progs:
               if st.startswith(today):
-                  idx.setdefault(cid, []).append({"s": st, "t": ""})
-          names = {}
-          for m in re.finditer(r'<channel id="([^"]+)">.*?<display-name[^>]*>([^<]+)</display-name>', txt, re.S):
-              names[m.group(1)] = m.group(2)
+                  idx.setdefault(cid, []).append({"s": st})
           idx_json = {names.get(c, c): [{"s": x["s"]} for x in v[:12]] for c, v in idx.items()}
-          with open("output/epg_index.json", "w", encoding="utf-8") as fh:
+          out = os.path.join("..", "output", "epg_index.json")
+          with open(out, "w", encoding="utf-8") as fh:
               json.dump(idx_json, fh, ensure_ascii=False, separators=(",", ":"))
-          print(f"✓ output/epg.xml: {len(ch)} 频道, {len(progs)} 节目")
+          print(f"✓ output/epg.xml: {len(names)} 频道, {len(progs)} 节目")
           print(f"✓ output/epg_index.json: {len(idx_json)} 频道今日节目")
           PY
 
@@ -110,10 +113,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git stash push -u -m "auto-stash" || true
-          git fetch origin "${GITHUB_REF_NAME}"
-          git rebase "origin/${GITHUB_REF_NAME}" || (git rebase --abort && exit 0)
-          git stash pop 2>/dev/null || true
           [ -f output/epg.xml ] && git add output/epg.xml
           [ -f output/epg_index.json ] && git add output/epg_index.json
           if git diff --cached --quiet; then echo "无变更"; exit 0; fi
