@@ -2,7 +2,7 @@ name: 每日 EPG 同步
 
 'on':
   schedule:
-    - cron: '40 18 * * *'   # 北京时间 02:40（站点凌晨 00:30 更新，错后抓取确保已更新）
+    - cron: '40 18 * * *'   # 北京时间 02:40，对齐 baoer 凌晨30分更新
   workflow_dispatch:
 
 permissions:
@@ -11,118 +11,156 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 抓取 baoer.org.cn EPG
+      - name: 抓取 EPG（baoer 主源 + zsdc 兜底）
         run: |
-          mkdir -p output
-          python3 - <<'EOF'
-          import urllib.request, ssl, gzip, re, sys
+          python3 - <<'PY'
+          import urllib.request, ssl, gzip, re, json, sys, os
           from datetime import datetime, timedelta, timezone
+
           ctx = ssl.create_default_context()
           ctx.check_hostname = False
           ctx.verify_mode = ssl.CERT_NONE
           TZ8 = timezone(timedelta(hours=8))
-          now = datetime.now(TZ8).strftime('%Y%m%d')
+          now = datetime.now(TZ8)
+          today8 = now.strftime('%Y%m%d')
           headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-          def fetch(url, label):
+          # ── 1. 下载 baoer 主源 ──────────────────────────
+          raw = None
+          for url in ["https://baoer.org.cn/e.xml.gz"]:
               try:
                   req = urllib.request.Request(url, headers=headers)
                   with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
                       raw = r.read()
-                  if url.endswith('.gz'):
-                      text = gzip.decompress(raw).decode('utf-8', 'ignore')
-                  else:
-                      text = raw.decode('utf-8', 'ignore')
-                  ch = len(set(re.findall(r'channel id="([^"]+)"', text)))
-                  dates = re.findall(r'start="(\d{14})', text)
-                  latest = max(dates)[:8] if dates else "无"
-                  verdict = "🟢新鲜" if latest >= now else "🔴过期"
-                  print(f"✅ {label:<14} {len(text):>9}字节 {ch:>4}频道 {len(dates):>5}节目 最新{latest} {verdict}")
-                  return text
+                  print(f"📥 下载: {url} → {len(raw)} 字节")
+                  break
               except Exception as e:
-                  print(f"❌ {label:<14} {str(e)[:40]}")
-                  return None
+                  print(f"❌ {url}: {e}")
 
-          merged = {}
-          for url, label in [
-              ("https://baoer.org.cn/e.xml.gz", "baoer 当天"),
-              ("https://baoer.org.cn/e.xml",     "baoer 当天-xml"),
-          ]:
-              t = fetch(url, label)
-              if t:
-                  ingest(t, merged); break
-          for url, label in [
-              ("https://baoer.org.cn/x.xml.gz", "baoer 7天"),
-              ("https://baoer.org.cn/x.xml",     "baoer 7天-xml"),
-          ]:
-              t = fetch(url, label)
-              if t:
-                  ingest(t, merged); break
+          if not raw:
+              # ── 2. 兜底：zsdc 配套 EPG ──────────────────
+              print("⚠️ baoer 失败，尝试 zsdc 兜底")
+              try:
+                  req = urllib.request.Request("https://epg.zsdc.eu.org/t.xml.gz", headers=headers)
+                  with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
+                      text = gzip.decompress(r.read()).decode('utf-8', 'ignore')
+                  print(f"📥 zsdc 兜底下载成功 → {len(text)} 字符")
+              except Exception as e:
+                  print(f"❌ zsdc 兜底也失败: {e}")
+                  sys.exit(1)
+          else:
+              # ── 2. 解压 ─────────────────────────────────
+              try:
+                  text = gzip.decompress(raw).decode('utf-8', 'ignore')
+                  print(f"✅ 解压完成 → {len(text)} 字符")
+              except Exception as e:
+                  print(f"❌ 解压失败: {e}")
+                  sys.exit(1)
 
-          def ingest(text, store):
-              for m in re.finditer(r'<channel id="([^"]+)">(.*?)</channel>', text, re.S):
-                  cid, body = m.group(1), m.group(2)
-                  store.setdefault(cid, {})
-                  dn = re.search(r'<display-name[^>]*>([^<]+)</display-name>', body)
-                  if dn: store[cid]['name'] = dn.group(1)
-              for m in re.finditer(r'<programme channel="([^"]+)" start="(\d{14})"[^>]*>(.*?)</programme>', text, re.S):
-                  cid, start, body = m.group(1), m.group(2), m.group(3)
-                  store.setdefault(cid, {}).setdefault('progs', [])
-                  stop = re.search(r'stop="(\d{14})"', m.group(0))
-                  title = re.search(r'<title[^>]*>([^<]+)</title>', body)
-                  store[cid]['progs'].append({
-                      "start": start,
-                      "stop": stop.group(1) if stop else "",
-                      "title": title.group(1) if title else "",
-                  })
+          # ── 3. 解析 ────────────────────────────────────
+          channels = re.findall(r'<channel id="([^"]+)"', text)
+          names = {}
+          for m in re.finditer(r'<channel id="([^"]+)">(.*?)</channel>', text, re.S):
+              nm = re.search(r'<display-name[^>]*>([^<]+)</display-name>', m.group(2))
+              if nm:
+                  names[m.group(1)] = nm.group(1)
+          programmes = re.findall(r'<programme\b[^>]*>.*?</programme>', text, re.S)
+          dates = re.findall(r'<programme[^>]*start="(\d{14})"', text)
+          latest = max(dates)[:8] if dates else "无"
+          print(f"✅ 解析: {len(channels)} 频道 / {len(programmes)} 节目, 最新日期 {latest}")
 
-          # 兜底：baoer 失败时用 Guovin gd
-          if not merged:
-              print("⚠️ baoer 全部失败，尝试 Guovin gd 兜底")
-              t = fetch("https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/epg/epg.xml", "Guovin gd")
-              if t:
-                  ingest(t, merged)
-
-          if not merged:
-              print("❌ 所有源均失败，退出")
+          if not channels:
+              print("❌ 无任何频道，退出")
               sys.exit(1)
 
-          # 写 epg.xml（标准 XMLTV）
-          import xml.etree.ElementTree as ET
-          tv = ET.Element("tv", attrib={"generator-info-name": "baoer.org.cn + guovin"})
-          for cid, info in merged.items():
-              ch = ET.SubElement(tv, "channel", {"id": cid})
-              dn = ET.SubElement(ch, "display-name")
-              dn.text = info.get('name', cid)
-              for p in info.get('progs', []):
-                  pe = ET.SubElement(tv, "programme", {"channel": cid})
-                  if p.get('start'): pe.set("start", p['start'])
-                  if p.get('stop'): pe.set("stop", p['stop'])
-                  te = ET.SubElement(pe, "title")
-                  te.text = p['title']
-          tree = ET.ElementTree(tv)
-          tree.write("output/epg.xml", encoding="UTF-8", xml_declaration=True)
-          total_prog = sum(len(v.get('progs', [])) for v in merged.values())
-          print(f"\n✓ output/epg.xml: {len(merged)} 频道, {total_prog} 节目")
+          # ── 4. 时间过滤 ─────────────────────────────────
+          cutoff_past = now - timedelta(hours=6)
+          cutoff_future = now + timedelta(days=3)
+          kept, dropped_past, dropped_future = [], 0, 0
+          for p in programmes:
+              ms = re.search(r'start="(\d{14})"', p)
+              me = re.search(r'stop="(\d{14})"', p)
+              start = datetime.strptime(ms.group(1), '%Y%m%d%H%M%S').replace(tzinfo=TZ8) if ms else None
+              end = datetime.strptime(me.group(1), '%Y%m%d%H%M%S').replace(tzinfo=TZ8) if me else None
+              if start and start > cutoff_future:
+                  dropped_future += 1
+                  continue
+              if end and end < cutoff_past:
+                  dropped_past += 1
+                  continue
+              kept.append(p)
+          # 移除空频道
+          ch_with_prog = set(re.search(r'channel="([^"]+)"', p).group(1) for p in kept if re.search(r'channel="([^"]+)"', p))
+          kept_channels = [c for c in channels if c in ch_with_prog]
+          print(f"🕒 时间过滤: 保留 {len(kept)} 条, 丢弃过期 {dropped_past} 条, 丢弃过远未来 {dropped_future} 条, 移除空频道 {len(channels)-len(kept_channels)} 个")
 
-          # 写 epg.json
-          import json
-          j = {cid: {"name": info.get('name', cid), "programs": info.get('progs', [])} for cid, info in merged.items()}
-          with open("output/epg.json", "w", encoding="utf-8") as f:
-              json.dump(j, f, ensure_ascii=False, separators=(",", ":"))
-          print(f"✓ output/epg.json: {len(j)} 频道")
-          EOF
+          if not kept:
+              # 兜底：保留昨天的，不出现空白
+              yest = (now - timedelta(days=1)).strftime('%Y%m%d')
+              yest_path = os.path.join(os.getcwd(), 'output', f'epg-{yest}.xml')
+              if os.path.exists(yest_path):
+                  print(f"⚠️ 当日无数据，沿用昨日 {yest_path}")
+                  sys.exit(0)
+              print("❌ 过滤后无节目，且昨日无备份")
+              sys.exit(1)
+
+          # ── 5. 组装 XMLTV ───────────────────────────────
+          xml = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE tv SYSTEM "xmltv.dtd">\n<tv generator-info-name="baoer.org.cn/zsdc">\n'
+          for c in kept_channels:
+              nm = names.get(c, c)
+              xml += f'  <channel id="{c}"><display-name lang="zh">{nm}</display-name></channel>\n'
+          xml += ''.join(kept) + '</tv>\n'
+
+          out_dir = os.path.join(os.getcwd(), 'output')
+          os.makedirs(out_dir, exist_ok=True)
+          out_xml = os.path.join(out_dir, 'epg.xml')
+          with open(out_xml, 'w', encoding='utf-8') as fh:
+              fh.write(xml)
+          print(f"✓ output/epg.xml: {len(kept_channels)} 频道 / {len(kept)} 节目")
+
+          # ── 6. 写 epg.json（全量，含未来，供前端）──────
+          all_progs = []
+          for p in programmes:
+              mc = re.search(r'channel="([^"]+)"', p)
+              ms = re.search(r'start="(\d{14})"', p)
+              me = re.search(r'stop="(\d{14})"', p)
+              mt = re.search(r'<title[^>]*>([^<]+)</title>', p)
+              if mc and ms:
+                  all_progs.append({
+                      "channel": mc.group(1),
+                      "start": ms.group(1),
+                      "stop": me.group(1) if me else "",
+                      "title": mt.group(1) if mt else "",
+                  })
+          json_path = os.path.join(out_dir, 'epg.json')
+          with open(json_path, 'w', encoding='utf-8') as fh:
+              json.dump({"channels": {c: names.get(c, c) for c in channels}, "programmes": all_progs}, fh, ensure_ascii=False, separators=(',', ':'))
+          print(f"✓ output/epg.json: {len(channels)} 频道 / {len(all_progs)} 节目")
+
+          # 同时存一份带日期的备份
+          dated = os.path.join(out_dir, f'epg-{today8}.xml')
+          with open(dated, 'w', encoding='utf-8') as fh:
+              fh.write(xml)
+          print(f"✓ 已备份: {dated}")
+          PY
 
       - name: 提交并推送
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add output/epg.xml output/epg.json 2>/dev/null || true
-          if git diff --cached --quiet; then echo "无变更"; exit 0; fi
+          [ -f output/epg.xml ] && git add output/epg.xml
+          [ -f output/epg.json ] && git add output/epg.json
+          git add output/epg-*.xml 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "无变更"
+            exit 0
+          fi
+          git fetch origin "${GITHUB_REF_NAME}"
+          git rebase "origin/${GITHUB_REF_NAME}" || git rebase --abort
           git commit -m "chore: auto sync epg [skip ci]" && git push origin "HEAD:${GITHUB_REF_NAME}"
