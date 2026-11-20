@@ -1,6 +1,6 @@
 name: 每日点播源更新
 
-on:
+'on':
   schedule:
     - cron: '0 19 */3 * *'   # UTC 19:00 = 北京时间次日 03:00，每 3 天一次，与直播源错峰
   workflow_dispatch:
@@ -18,11 +18,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -54,21 +54,17 @@ jobs:
         if: steps.ts.outputs.need_update == 'true'
         run: python aggregator.py --vod
 
-      - name: 记录本次执行时间
-        if: steps.ts.outputs.need_update == 'true'
-        run: |
-          # 聚合成功后才更新时间戳，确保失败不刷新间隔
-          date +%s > .vod_last_update
-          git add .vod_last_update
-
       - name: 提交并推送
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           [ -d output ] && git add output/ || true
-          # 时间戳文件必须在 commit 覆盖范围内：无论聚合是否产生变更都提交，
-          # 保证 .vod_last_update 随每次成功执行推进，下一次 cron 能正确计算间隔
+          # 仅在本次确实产生了产物变更时刷新时间戳，失败运行不重置间隔
+          if ! git diff --cached --quiet; then
+            date +%s > .vod_last_update
+          fi
+          # 时间戳文件必须在 commit 覆盖范围内，保证随每次成功执行推进
           [ -f .vod_last_update ] && git add .vod_last_update || true
 
           if git diff --cached --quiet; then
@@ -77,15 +73,31 @@ jobs:
             exit 0
           fi
 
+          # 有变更：先把暂存内容 stash 起来，保证 rebase 时 index 干净
           git fetch origin "${GITHUB_REF_NAME}"
-          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
-            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
-            git rebase --abort || true
+
+          if ! git stash push -u -m "pre-rebase-$(date +%s)"; then
+            echo "stash 失败，放弃本次提交"
             exit 0
           fi
 
-          git commit -m "chore: auto update vod sources [skip ci]" && \
-          (git push origin "HEAD:${GITHUB_REF_NAME}" || \
-            (git fetch origin "${GITHUB_REF_NAME}" && \
-             git rebase "origin/${GITHUB_REF_NAME}" && \
-             git push origin "HEAD:${GITHUB_REF_NAME}"))
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
+            git rebase --abort || true
+            git stash pop || true
+            exit 0
+          fi
+
+          # rebase 成功，恢复暂存内容，并重新 add 被 stash 带走的产物
+          git stash pop || true
+          [ -d output ] && git add output/ || true
+          [ -f .vod_last_update ] && git add .vod_last_update || true
+
+          if git commit -m "chore: auto update vod sources [skip ci]"; then
+            if ! git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "首次 push 失败，重新 fetch + rebase 后重试"
+              git fetch origin "${GITHUB_REF_NAME}" && \
+              git rebase "origin/${GITHUB_REF_NAME}" && \
+              git push origin "HEAD:${GITHUB_REF_NAME}"
+            fi
+          fi
