@@ -92,6 +92,16 @@ live:
     - "https://iptv.zsdc.eu.org/home/iptv.m3u8"        # 标准版
     - "https://iptv.zsdc.eu.org/home/apt_iptv.m3u8"   # APTV 兼容版
 
+  # ── 第 5 组：本地源目录（自动扫描）──
+  # 说明：把直播清单（.txt / .m3u / .m3u8）放到此目录，
+  #       aggregator 启动时自动加载，无需逐个配置 URL。
+  # 文件名自动识别类型（不区分大小写）：
+  #   含 4k / 8k / ultra / uhd → 走 4K 候选轮次
+  #   含 refresh / 刷新 / 鉴权 / 签名 / 过期 → 走需刷新轮次
+  #   其余 → 静态源（固定直链，国内源加分）
+  # 目录内优先级：文件越多越靠后加入，保持可预测顺序
+  local_dir: "inputs"
+
   # ── 清晰度配额：每频道各保留多少路 ──
   # 晚高峰 4K×4 + 1080p×5 + 720p×3 = 12
   # 白天   4K×3 + 1080p×4 + 720p×2 = 9
