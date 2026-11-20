@@ -1,7 +1,7 @@
 # ============================================================
 #  TVBox 影视仓 聚合配置
 #  github: shuo0101/ysc-self-host
-#  对应 aggregator.py v8.15
+#  对应 aggregator.py v8.16
 # ============================================================
 # ── 台标基础地址 ──
 logo:
@@ -84,6 +84,14 @@ live:
     - "https://event.pull.hebtv.com/jishi/cp1.m3u8"
     - "https://event.pull.hebtv.com/jishi/cp2.m3u8"
 
+  # ── 第 4 组：成都/四川电信 IPTV（zsdc 单播源，配套回看+时移）──
+  # 来源：https://iptv.zsdc.eu.org
+  # 说明：单播源支持时移/回看，配套电子节目单见下方 epg.primary
+  # 注意：仅限电信网络内可用，非电信网络可能受限
+  urls_zsdc:
+    - "https://iptv.zsdc.eu.org/home/iptv.m3u8"        # 标准版
+    - "https://iptv.zsdc.eu.org/home/apt_iptv.m3u8"   # APTV 兼容版
+
   # ── 清晰度配额：每频道各保留多少路 ──
   # 晚高峰 4K×4 + 1080p×5 + 720p×3 = 12
   # 白天   4K×3 + 1080p×4 + 720p×2 = 9
@@ -150,11 +158,14 @@ discover:
 
 # ============================================================
 #  电子节目单（EPG）
-#  本节为待对接状态，aggregator.py v8.15 不读此字段。
-#  EPG 抓取由 epg_sync.py 负责，源地址硬编码在 epg_sync.py 的常量里。
+#  来源：https://epg.zsdc.eu.org  —— zsdc 配套节目单
+#  说明：7 天回看 + 5 天预告，每日更新 ≥2 次
+#  注意：此 EPG 与上方 live.urls_zsdc 直播源为配套设计，
+#        请保持两者来自同一项目，避免频道 ID 错配。
 # ============================================================
 epg:
-  primary: "https://cdn.jsdelivr.net/gh/BurningC4/Chinese-IPTV@master/guide.xml"
+  primary: "https://epg.zsdc.eu.org/t.xml.gz"
   backups:
+    - "https://baoer.org.cn/e.xml.gz"
     - "https://live.fanmingming.com/e.xml"
-    - "https://epg.112114.xyz/pp.xml"
+    - "https://cdn.jsdelivr.net/gh/BurningC4/Chinese-IPTV@master/guide.xml"
