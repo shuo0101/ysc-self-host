@@ -255,6 +255,32 @@ def tvg_id(n):
     return t.replace('卫视', '')
 
 
+def _resolve_4k8k_key(base_key, name_key, raw_name):
+    """解决 K/8K/+ 频道与同名普通频道的 key 冲突。
+
+    规则：
+    - 若名字明确是 K/8K/+ 频道（name_key 含 4K/8K/+），则以名字为准，
+      即使源的 tvg-id 漏写了 K，也不并入普通频道。
+    - 若名字是普通频道（如 CCTV4），但 tvg-id 却带 K，同样以名字为准，
+      避免误拆。
+    一句话：以"名字"里是否带 K/8K/+' 作为频道身份的最终裁定。
+    """
+    if not base_key:
+        return name_key
+    if not name_key:
+        return base_key
+
+    base_has_k = bool(re.search(r'[48]K', base_key)) or ('+' in base_key)
+    name_has_k = bool(re.search(r'[48]K', name_key)) or ('+' in name_key)
+
+    # 双方一致：直接用归一化结果
+    if base_has_k == name_has_k:
+        return base_key
+
+    # 不一致：以名字为准
+    return name_key
+
+
 def classify(name):
     if not name:
         return '其他频道'
@@ -813,7 +839,12 @@ async def aggregate_live(url_pairs, repo_prefix):
 
     groups = {}
     for ch in all_ch:
-        key = normalize_tvg_id(ch.get('tvg_id') or ch['name'])
+        # ── key 生成：优先 tvg-id，但名字里含 K/8K/+ 时必须保留，
+        #    避免源的 tvg-id 漏写 K 导致 CCTV4K 被并入 CCTV4 ──
+        # 例：tvg-id="CCTV4" tvg-name="CCTV-4K" → 归为 CCTV4K，而非并入 CCTV4
+        base_key = normalize_tvg_id(ch.get('tvg_id') or ch['name'])
+        name_key = normalize_tvg_id(ch.get('name') or '')
+        key = _resolve_4k8k_key(base_key, name_key, ch.get('name', ''))
         if not key:
             continue
         groups.setdefault(key, []).append(ch)
