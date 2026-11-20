@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -149,25 +149,53 @@ jobs:
 
       - name: 提交并推送
         run: |
-          git config user.name "github-actions[bot]"
+          set -e
+          git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config pull.rebase true
-          git add output/epg.xml output/epg.json output/epg-*.xml 2>/dev/null || true
-          git stash push -u -m "pre-rebase-$(date +%s)" || true
-          git fetch origin "${GITHUB_REF_NAME}"
-          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
-            git rebase --abort || true
-            git stash pop || true
-            echo "❌ rebase 失败"
-            exit 1
-          fi
-          git stash pop || true
-          git add output/epg.xml output/epg.json output/epg-*.xml 2>/dev/null || true
+
+          # ── 1. 产物放进 index ─────────────────────────────
+          [ -f output/epg.xml ]  && git add output/epg.xml  || true
+          [ -f output/epg.json ] && git add output/epg.json || true
+          git add output/epg-*.xml 2>/dev/null || true
+
+          # ── 2. 先判断有无变更（无变更直接退出，不动 index）──
           if git diff --cached --quiet; then
             echo "无变更，跳过提交"
             exit 0
           fi
+          echo "检测到变更，准备提交："
+          git diff --cached --name-only
+
+          # ── 3. 有变更才 stash ─────────────────────────────
+          git fetch origin "${GITHUB_REF_NAME}"
+          git stash push -u -m "pre-rebase-$(date +%s)"
+
+          # ── 4. rebase ─────────────────────────────────────
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            echo "⚠️ rebase 冲突，本次跳过，等待下次 cron"
+            git rebase --abort || true
+            git stash pop || true
+            exit 0
+          fi
+
+          # ── 5. rebase 成功，pop 后 ★ 重新 add（关键）──────
+          git stash pop || true
+          [ -f output/epg.xml ]  && git add output/epg.xml  || true
+          [ -f output/epg.json ] && git add output/epg.json || true
+          git add output/epg-*.xml 2>/dev/null || true
+
+          if git diff --cached --quiet; then
+            echo "⚠️ pop 后无暂存变更，跳过提交"
+            exit 0
+          fi
+
+          # ── 6. commit + push（失败重试一次）────────────────
           git commit -m "chore: auto sync epg [skip ci]"
-          for i in 1 2 3; do
-            git fetch origin "${GITHUB_REF_NAME}" &&             git rebase "origin/${GITHUB_REF_NAME}" &&             git push origin "HEAD:${GITHUB_REF_NAME}" && { echo "✅ 推送成功"; break; } || { echo "重试 $i ..."; sleep 5; }
-          done
+          if ! git push origin "HEAD:${GITHUB_REF_NAME}"; then
+            echo "首次 push 失败，重新 fetch + rebase 后重试"
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+          echo "✅ 推送成功"
