@@ -1,65 +1,32 @@
-name: 每日 EPG 同步
-
-'on':
-  schedule:
-    - cron: '30 18 * * *'   # UTC 18:30 = 北京时间 02:30，排在 daily-update(02:00) 与 daily-vod(02:15) 之后
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-concurrency:
-  group: ${{ github.repository }}-repo-update
-  cancel-in-progress: false
-
+name: EPG 探路诊断
+'on': workflow_dispatch
 jobs:
-  sync:
+  probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: 同步 EPG
-        run: python epg_sync.py
-        continue-on-error: true
-
-      - name: 提交并推送
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # 先 stash 掉所有未提交改动（含未跟踪文件），保证后续 rebase 时 index 干净
-          git stash push -u -m "auto-stash before rebase" || true
-
-          git fetch origin "${GITHUB_REF_NAME}"
-
-          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
-            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
-            git rebase --abort || true
-            git stash pop 2>/dev/null || true
-            exit 0
-          fi
-
-          # rebase 成功后恢复 stash 内容，再统一 add
-          git stash pop 2>/dev/null || true
-          [ -d output ] && git add output/ || true
-
-          if git diff --cached --quiet; then
-            echo "无变更，跳过提交"
-            exit 0
-          fi
-
-          git commit -m "chore: auto sync epg [skip ci]" && \
-          (git push origin "HEAD:${GITHUB_REF_NAME}" || \
-            (git fetch origin "${GITHUB_REF_NAME}" && \
-             git rebase "origin/${GITHUB_REF_NAME}" && \
-             git push origin "HEAD:${GITHUB_REF_NAME}")) || {
-              echo "⚠️ push 失败，等待下次重试"
-              exit 0
-          }
+      - run: |
+          mkdir -p probe && cd probe
+          git clone --depth 1 https://github.com/iptv-org/epg.git .
+          npm ci >/dev/null 2>&1
+          echo "########## 1. grab.ts --help ##########"
+          node -r @swc-node/register scripts/commands/epg/grab.ts --help || true
+          echo
+          echo "########## 2. sites/ 前 20 个目录 ##########"
+          ls sites/ | head -20
+          echo
+          echo "########## 3. sites/ 总数 ##########"
+          ls sites/ | wc -l
+          echo
+          echo "########## 4. channels/ 前 20 个文件 ##########"
+          ls channels/ | head -20
+          echo
+          echo "########## 5. 含 cn 的 channels ##########"
+          ls channels/ | grep -i "\.cn\." | head -20 || echo "无匹配"
+          echo
+          echo "########## 6. 读一个 site 配置看 ID 字段 ##########"
+          ls sites/ | head -1 | while read d; do
+            echo "目录: $d"
+            ls "sites/$d/" | head -5
+            echo "--- config.js / config.ts 内容（前 30 行）---"
+            head -30 "sites/$d"/*.ts "sites/$d"/*.js 2>/dev/null || true
+          done
