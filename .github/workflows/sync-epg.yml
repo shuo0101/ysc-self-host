@@ -1,32 +1,29 @@
-name: EPG 探路诊断
+# .github/workflows/probe-baoer.yml（一次性，跑完可删）
+name: 测 baoer 可达性
 'on': workflow_dispatch
 jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          mkdir -p probe && cd probe
-          git clone --depth 1 https://github.com/iptv-org/epg.git .
-          npm ci >/dev/null 2>&1
-          echo "########## 1. grab.ts --help ##########"
-          node -r @swc-node/register scripts/commands/epg/grab.ts --help || true
-          echo
-          echo "########## 2. sites/ 前 20 个目录 ##########"
-          ls sites/ | head -20
-          echo
-          echo "########## 3. sites/ 总数 ##########"
-          ls sites/ | wc -l
-          echo
-          echo "########## 4. channels/ 前 20 个文件 ##########"
-          ls channels/ | head -20
-          echo
-          echo "########## 5. 含 cn 的 channels ##########"
-          ls channels/ | grep -i "\.cn\." | head -20 || echo "无匹配"
-          echo
-          echo "########## 6. 读一个 site 配置看 ID 字段 ##########"
-          ls sites/ | head -1 | while read d; do
-            echo "目录: $d"
-            ls "sites/$d/" | head -5
-            echo "--- config.js / config.ts 内容（前 30 行）---"
-            head -30 "sites/$d"/*.ts "sites/$d"/*.js 2>/dev/null || true
-          done
+          python3 - <<'EOF'
+          import urllib.request, ssl, gzip, re
+          from datetime import datetime, timedelta, timezone
+          ctx = ssl.create_default_context()
+          ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE
+          TZ8 = timezone(timedelta(hours=8))
+          now = datetime.now(TZ8).strftime('%Y%m%d')
+          for url in ["https://baoer.org.cn/e.xml.gz","https://baoer.org.cn/e.xml",
+                      "https://baoer.org.cn/x.xml.gz","https://baoer.org.cn/x.xml"]:
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                  with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
+                      raw = r.read()
+                  text = gzip.decompress(raw).decode('utf-8','ignore') if url.endswith('.gz') else raw.decode('utf-8','ignore')
+                  dates = re.findall(r'start="(\d{14})', text)
+                  latest = max(dates)[:8] if dates else "无"
+                  ch = len(set(re.findall(r'channel id="([^"]+)"', text)))
+                  print(f"✅ {url:<34} {len(text):>9}字节 {ch:>4}频道 {len(dates):>5}节目 最新{latest} {'🟢' if latest>=now else '🔴'}")
+              except Exception as e:
+                  print(f"❌ {url:<34} {str(e)[:36]}")
+          EOF
