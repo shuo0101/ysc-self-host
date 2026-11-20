@@ -512,6 +512,9 @@ def is_domestic_url(url):
         'cztv.com', 'bupt.edu.cn', 'hebtv.com', 'sdetv.com.cn',
         'bestv.cn', 'sztv.com.cn', 'tdm.com.mo', 'hkstv.tv',
         'fanmingming.com',
+        # 成都/四川电信 IPTV 项目（zsdc.eu.org 根域），含 iptv./epg. 等所有子域名
+        # 虽为 .eu.org 但属国内电信内网源，应加分
+        'zsdc.eu.org',
     )
     for kw in domestic_keywords:
         if kw in host:
@@ -542,10 +545,11 @@ async def discover_live(_session):
     static = list(LIVE_CFG.get('urls_static') or [])
     static_4k = list(LIVE_CFG.get('urls_static_4k') or [])
     refresh = list(LIVE_CFG.get('urls_refresh') or [])
+    zsdc = list(LIVE_CFG.get('urls_zsdc') or [])   # 成都/四川电信 IPTV（zsdc 单播源，配套回看+时移）
     force = os.environ.get('FORCE_REFRESH', '').lower() in ('1', 'true', 'yes')
 
-    if not static and not static_4k and not refresh:
-        print("⚠️ config.yaml 的 live.urls_static / urls_static_4k / urls_refresh 均未配置，直播源将为空")
+    if not static and not static_4k and not refresh and not zsdc:
+        print("⚠️ config.yaml 的 live.urls_static / urls_static_4k / urls_refresh / urls_zsdc 均未配置，直播源将为空")
         return []
 
     urls = [(u, True, False) for u in static]
@@ -554,6 +558,8 @@ async def discover_live(_session):
         urls += [(u, False, False) for u in refresh]
     else:
         print(f"    ℹ️ 跳过 {len(refresh)} 个需刷新源（缓存有效；FORCE_REFRESH=1 可强制）")
+    # zsdc 单播源作为静态源处理（固定直链），走国内源加分
+    urls += [(u, True, False) for u in zsdc]
     return urls
 
 
@@ -863,7 +869,13 @@ async def aggregate_live(url_pairs, repo_prefix):
         if picked:
             selected[k] = picked
 
-    epg = f"{repo_prefix}/epg.xml"
+    # ── EPG：读 config.yaml 的 epg.primary，缺省回退仓库内 epg.xml ──
+    _epg_cfg = (CONFIG.get('epg', {}) or {})
+    epg = _epg_cfg.get('primary') or f"{repo_prefix}/epg.xml"
+    # ── zsdc 配套 EPG：zsdc 频道单独打标签，走 epg.zsdc ──
+    zsdc_epg = _epg_cfg.get('zsdc') or epg
+    _is_zsdc_url = lambda u: 'iptv.zsdc.eu.org' in (u or '')
+    _epg_for = lambda u: zsdc_epg if _is_zsdc_url(u) else epg
 
     channel_map = OrderedDict()
     for key, urls in selected.items():
@@ -879,6 +891,7 @@ async def aggregate_live(url_pairs, repo_prefix):
             'logo': primary.get('logo') or logo_url(tid or n),
             'group': classify(n), 'urls': urls,
             'resolution': max_res, 'domestic': domestic_cnt,
+            'is_zsdc': _is_zsdc_url(primary.get('url', '')),   # zsdc 频道标记
         }
 
     sorted_items = sorted(channel_map.items(), key=lambda item: channel_sort_key(item[1]))
@@ -890,6 +903,7 @@ async def aggregate_live(url_pairs, repo_prefix):
     txt_lines, m3u_lines = [], ['#EXTM3U x-tvg-url="%s"' % epg]
     total_urls = 0
     total_domestic = 0
+    zsdc_lines = 0
     for g in GROUP_ORDER:
         chs_in_group = grouped_output.get(g, [])
         if not chs_in_group:
@@ -906,13 +920,21 @@ async def aggregate_live(url_pairs, repo_prefix):
                 res_tag = "1280"
             else:
                 res_tag = "720"
+            # 该频道走哪套 EPG
+            ch_epg = zsdc_epg if ch.get('is_zsdc') else epg
             for c in ch['urls']:
                 txt_lines.append(f"{n},{c['url']}")
-                m3u_lines.append(
+                line = (
                     f'#EXTINF:-1 tvg-id="{ch["tvg_id"]}" tvg-name="{n}" '
                     f'tvg-logo="{ch["logo"]}" tvg-resolution="{res_tag}" '
-                    f'group-title="{g}",{n}'
+                    f'group-title="{g}"'
                 )
+                # zsdc 频道的每条线路都单独指向 zsdc 配套 EPG
+                if ch.get('is_zsdc'):
+                    line += f' tvg-url="{zsdc_epg}"'
+                    zsdc_lines += 1
+                line += f',{n}'
+                m3u_lines.append(line)
                 m3u_lines.append(c['url'])
                 total_urls += 1
                 if c.get('_domestic'):
@@ -930,6 +952,8 @@ async def aggregate_live(url_pairs, repo_prefix):
 
     print(f"\n✅ 一轮探测完成：{len(groups)} 频道探测，{len(selected)} 频道有线路")
     print(f"📊 最终频道数: {total_ch}，分组后: {total_ch}，线路总数: {total_urls}")
+    if zsdc_lines:
+        print(f"📺 zsdc 成都/四川电信源：{zsdc_lines} 条线路（走配套 EPG {zsdc_epg}）")
     if total_urls > 0:
         print(f"📊 线路来源：国内源 {total_domestic} 条 ({total_domestic/total_urls*100:.0f}%)，"
               f"海外源 {total_urls-total_domestic} 条 ({(total_urls-total_domestic)/total_urls*100:.0f}%)")
