@@ -153,9 +153,31 @@ def make_session(retries: int = 2, backoff: float = 1.0,
 
 
 def fetch_text(url: str, timeout: int = 15) -> Tuple[Optional[str], dict]:
-    """抓取一个 URL 的文本内容"""
+    """抓取一个 URL（或本地文件）的文本内容"""
     info: dict = {"url": url, "error": None, "status": 0, "elapsed": 0.0,
                   "bytes": 0, "final_url": url}
+
+    # ── 本地文件：绝对路径 / file:// 协议 ──
+    local = url
+    if local.startswith("file://"):
+        local = local[7:]
+    if local.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", local):
+        t0 = time.time()
+        try:
+            fp = Path(local)
+            if not fp.exists():
+                info["error"] = f"本地文件不存在：{fp}"
+                return None, info
+            raw = fp.read_bytes()
+            text = raw.decode("utf-8", errors="replace")
+            info.update({"status": 200, "bytes": len(raw),
+                         "elapsed": round(time.time() - t0, 2),
+                         "final_url": str(fp)})
+            return text, info
+        except Exception as e:  # noqa
+            info["error"] = f"{type(e).__name__}: {e}"
+            return None, info
+
     session = make_session(timeout=timeout)
     try:
         r = session.get(url, timeout=timeout, allow_redirects=True)
@@ -199,12 +221,113 @@ def fetch_with_fallback(url: str, fallbacks: Sequence[str],
 #  源发现（网络 + 本地）
 # ═════════════════════════════════════════════════════════════
 
+def build_sources(cfg: dict) -> List[dict]:
+    """
+    把 config.yaml 里 live / vod / discover 各分组展开成统一的 sources 列表。
+
+    支持的写法（缺哪个都不会报错）：
+      live.urls_static       网络清单 URL（m3u / txt）
+      live.urls_static_4k    同上，标记为 4K 候选
+      live.urls_refresh      带签名/会过期的清单 URL
+      live.urls_zsdc         运营商单播源清单
+      live.urls_custom       自定义补充清单
+      live.local_dir        本地目录，自动扫描 *.txt / *.m3u / *.m3u8
+      live.sources          已按旧格式写好的完整源定义（原样保留）
+      discover.vod_seeds    点播种子
+    顶层 sources: 若已存在，则与上面展开的结果合并（按 url 去重）。
+    """
+    base = Path(cfg.get("base_dir", "."))
+    live_cfg = cfg.get("live", {}) or {}
+    out: List[dict] = []
+    seen: set = set()
+
+    def add(item: dict):
+        url = (item.get("url") or "").strip()
+        if not url or url in seen:
+            return
+        seen.add(url)
+        out.append(item)
+
+    # 原有顶层 sources（含 type=vod）原样保留
+    for s in (cfg.get("sources", []) or []):
+        if isinstance(s, dict) and s.get("url"):
+            add(dict(s))
+
+    # live.sources 旧格式
+    for s in (live_cfg.get("sources", []) or []):
+        if isinstance(s, dict) and s.get("url"):
+            item = dict(s)
+            item.setdefault("type", "live")
+            add(item)
+
+    # URL 分组 → 统一转成 network 源
+    groups = [
+        ("urls_static", "static-list", {}),
+        ("urls_static_4k", "static-4k", {"tags": ["4k-candidate"]}),
+        ("urls_refresh", "refresh", {"tags": ["refresh"]}),
+        ("urls_zsdc", "zsdc", {}),
+        ("urls_custom", "custom", {}),
+    ]
+    for key, label, extra in groups:
+        for u in (live_cfg.get(key, []) or []):
+            if not isinstance(u, str) or not u.strip():
+                continue
+            item = {
+                "type": "live", "name": f"{label}#{len(out) + 1}",
+                "url": u.strip(), "source_type": "network",
+                "fallbacks": [],
+            }
+            item.update(extra)
+            add(item)
+
+    # 本地目录扫描
+    ldir = live_cfg.get("local_dir")
+    if ldir:
+        d = Path(ldir)
+        if not d.is_absolute():
+            d = base / d
+        if d.is_dir():
+            files = sorted(
+                p for p in d.iterdir()
+                if p.suffix.lower() in (".txt", ".m3u", ".m3u8") and p.is_file()
+            )
+            for p in files:
+                name = p.stem.lower()
+                tags: List[str] = []
+                if re.search(r"4k|8k|uhd|ultra", name):
+                    tags.append("4k-candidate")
+                if re.search(r"refresh|刷新|鉴权|签名|过期", name):
+                    tags.append("refresh")
+                add({
+                    "type": "live", "name": f"local/{p.name}",
+                    "url": str(p), "source_type": "local",
+                    "fallbacks": [], "tags": tags,
+                })
+            log.info(f"📁 本地源目录 {d}：发现 {len(files)} 个清单文件")
+        else:
+            log.warning(f"⚠️ 本地源目录不存在：{d}")
+
+    # 点播种子
+    for u in ((cfg.get("discover", {}) or {}).get("vod_seeds", []) or []):
+        if isinstance(u, str) and u.strip():
+            add({"type": "vod", "name": f"vod-seed#{len(out) + 1}",
+                 "url": u.strip(), "source_type": "network", "fallbacks": []})
+
+    live_n = sum(1 for s in out if s.get("type") == "live")
+    vod_n = sum(1 for s in out if s.get("type") == "vod")
+    log.info(f"🗂️  源清单展开：直播 {live_n} 个 / 点播 {vod_n} 个（已去重）")
+    return out
+
+
 def discover_live(cfg: dict) -> Tuple[List[Entry], List[dict]]:
     """
     发现并抓取所有直播源（网络 + 本地 + static）。
     返回 (entries, source_reports)
     """
-    sources = cfg.get("sources", []) or []
+    sources = [s for s in build_sources(cfg) if s.get("type") == "live"]
+    if not sources:
+        log.error("❌ 源清单为空：检查 config.yaml 的 live.urls_static / local_dir 是否配置")
+        return [], []
     timeout = int(cfg.get("fetch", {}).get("timeout", 30))
     cache_dir = Path(cfg.get("cache_dir", "cache"))
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -1546,7 +1669,7 @@ def run_vod(cfg: dict) -> dict:
     log.info("🎞️ 点播源聚合开始")
     t0 = time.time()
 
-    sources = [s for s in (cfg.get("sources", []) or []) if s.get("type") == "vod"]
+    sources = [s for s in build_sources(cfg) if s.get("type") == "vod"]
     all_items: List[dict] = []
     reports = []
     for src in sources:
@@ -1745,8 +1868,28 @@ def load_config(path: str) -> dict:
         raise FileNotFoundError(f"配置文件不存在：{p}")
     with p.open(encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
-    cfg.setdefault("base_dir", str(p.parent.resolve()))
-    cfg.setdefault("output_dir", str(p.parent / "output"))
+    base = p.parent.resolve()
+    cfg["base_dir"] = str(base)
+    # ── 键名对齐：config.yaml 里写在 live.* 下的参数，映射到代码实际读取的位置 ──
+    live_cfg = cfg.get("live", {}) or {}
+    fetch_cfg = cfg.setdefault("fetch", {})
+    fetch_cfg.setdefault("timeout", int(live_cfg.get("fetch_timeout", 30)))
+    fetch_cfg.setdefault("cache", bool(live_cfg.get("use_cache", False)))
+    probe_cfg = cfg.setdefault("probe", {})
+    probe_cfg.setdefault("timeout", int(live_cfg.get("timeout", 10)))
+    probe_cfg.setdefault("probe_timeout", int(live_cfg.get("probe_timeout", 6)))
+    probe_cfg.setdefault("concurrency", int(live_cfg.get("concurrency", 50)))
+    probe_cfg.setdefault("use_ffmpeg", bool(live_cfg.get("use_ffmpeg", False)))
+    probe_cfg.setdefault("min_resolution", int(live_cfg.get("min_resolution", 720)))
+    probe_cfg.setdefault("max_channels", int(live_cfg.get("max_channels", 1000)))
+    for k in ("candidate_pool", "cache_dir", "cache_ttl_hours",
+              "cache_ttl_seconds", "history_window", "stability_window",
+              "static_res_bonus", "sort_weights", "db_path"):
+        if k in live_cfg and k not in probe_cfg:
+            probe_cfg[k] = live_cfg[k]
+    cfg.setdefault("output_dir", str(live_cfg.get("output_dir") or (base / "output")))
+    if not (cfg.get("sources") or live_cfg.get("urls_static") or live_cfg.get("local_dir")):
+        log.warning("⚠️ config.yaml 未发现任何直播源（live.urls_static / local_dir / sources）")
     return cfg
 
 
