@@ -1,4 +1,16 @@
-aiohttp>=3.10.0
-aiofiles>=24.1.0
+# ── 核心运行依赖（aggregator / database / fetch_raw / sources / epg_sync）──
+requests>=2.31.0
 pyyaml>=6.0.2
+
+# requests 的传输层与重试（Retry / HTTPAdapter 由 requests 引入，
+# 这里显式声明，避免 requests 未来版本调整间接依赖导致 ImportError）
+urllib3>=2.0.0
+
+# ── 可选依赖：仅在启用对应功能时才需要 ──
+# web_ui.py（Flask 控制面板）需要；不跑 web_ui.py 可以不装
 flask>=3.0.3
+
+aiohttp>=3.10.0   # 若后续启用 aiohttp 异步抓取分支需要；当前 aggregator.py 为同步 requests 实现，未引用
+
+# 同上，aiofiles 仅在启用异步写盘分支时需要
+aiofiles>=24.1.0
