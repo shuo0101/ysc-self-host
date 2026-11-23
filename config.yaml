@@ -22,13 +22,13 @@ vod:
 # ============================================================
 live:
 # ═══════════════════════════════════════════════════════════
-# 探测策略：一轮探测 · 缓存复用 · 国内源优先 · 分清晰度达标即停
+# 探测策略：两阶段 · 国内源先测 · 每频道探测封顶 · 按画质配额保留
 #
-#   每个频道只探测一次，候选线路按"国内源优先"排序，
-#   每档清晰度探测到配额数即停止该频道：
-#     4K×4 + 1080p×5 + 720p×3 = 12 条（晚高峰）
-#     4K×3 + 1080p×4 + 720p×2 = 9 条（白天）
-#   线路不足时用国内 720p 源补满到 urls_per_channel。
+#   阶段一：抓取全部源 → 全局 URL 去重 → 按频道归一化分组
+#   阶段二：每频道最多取 probe.candidate_pool.max（20）条候选，
+#           国内源排最前先测；探测通过的线路按画质配额保留：
+#             4K×4 + 1080p×5 + 720p×3 = 12 条（见 live.res_quotas）
+#           某档线路不够时，用其它画质补齐，总数不超过 12。
 # ═══════════════════════════════════════════════════════════
 
   # ── 第 1 组：官方/长期静态源（无需鉴权，固定直链）──
@@ -72,105 +72,6 @@ live:
     - "https://live.fanmingming.com/tv/m3u/ipv6.m3u"
     - "https://raw.githubusercontent.com/hwansong/ipv6tv/main/iptv6.m3u"
 
-  
-    # ── 聚合直播源（整理自公开直播源清单，去重后追加）──
-    # 国内聚合源
-    - "http://175.178.251.183:6689/live.m3u"
-    - "http://175.178.251.183:6689/live.txt"
-    - "https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u"
-    - "https://tv.iill.top/m3u/Gather"
-    - "https://tv.iill.top/m3u/Live"
-    - "https://tv.iill.top/m3u/MyTV"
-    - "https://tv.iill.top/m3u/Sport"
-    - "https://tv.iill.top/m3u/Adult"
-    - "http://aktv.top/live.m3u"
-    - "http://aktv.top/live.txt"
-    - "https://epg.pw/test_channels.m3u"
-    - "https://epg.pw/test_channels_banned_cn.m3u"
-    - "https://epg.pw/test_channels_unknown.m3u"
-    - "https://raw.gitmirror.com/XiaoZhang5656/xiangzhang5656.github.io/main/iptv-live.txt"
-    - "https://live.freetv.top/huyayqk.m3u"
-    - "https://live.freetv.top/douyuyqk.m3u"
-    - "https://www.goodiptv.club/yylunbo.m3u?url=https://lunbo.freetv.top"
-    - "https://www.goodiptv.club/bililive.m3u"
-    - "http://mdxgh.tpddns.cn:9999/new/live.txt"
-    - "http://120.79.4.185/new/live.txt"
-    - "https://live.kilvn.com/iptv.m3u"
-    - "http://rihou.cc:555/gggg.nzk"
-    - "http://php.yhtv.us.kg/HK+TW.txt"
-    - "http://tot.totalh.net/tttt.txt"
-    - "https://gitea.moe/xiangjiao-ge/yifal69/raw/branch/main/yiyifafa.txt"
-    - "https://ghp.ci/https://raw.githubusercontent.com/BurningC4/IPTV/master/TV-IPV4.m3u"
-    - "https://live.zhoujie218.top/tv/iptv6.m3u"
-    - "https://live.zhoujie218.top/tv/iptv4.m3u"
-    - "https://bbs.ysctv.cn/tv/live.txt"
-    - "http://meowtv.top/zb"
-    - "http://meowtv.cn/zb"
-    - "https://bhapp.top/zb.txt"
-    - "http://yuhuahx.com/dsj66.txt"
-    - "http://xhztv.top/dsj.txt"
-    - "http://xhztv.top/aptv.txt"
-    - "http://xhztv.top/njyy.txt"
-    - "http://xhztv.top/dflive.txt"
-    - "http://xhztv.top/zb.txt"
-    - "http://xhztv.top/xx.txt"
-    - "http://xhztv.top/ipv6.txt"
-    - "http://xhztv.top/v4.txt"
-    - "http://xhztv.top/v6.txt"
-    - "http://xhztv.top/ipv6.m3u"
-    - "http://xhztv.top/ipv4.m3u"
-    - "http://39.101.135.137:8081/xx5.txt"
-    - "http://home.jundie.top:81/Cat/tv/live.txt"
-    - "https://live.zbds.top/tv/iptv4.txt"
-    - "https://szyyds.cn/tv/live/x.txt"
-    - "https://raw.bgithub.xyz/PizazzGY/TV/master/output/user_result.txt"
-    - "https://raw.bgithub.xyz/PizazzGY/TV/master/output/user_result.m3u"
-    - "https://raw.bgithub.xyz/Guovin/iptv-api/gd/output/result.m3u"
-    - "https://raw.bgithub.xyz/Guovin/iptv-api/gd/output/ipv4/result.m3u"
-    - "https://raw.bgithub.xyz/Guovin/iptv-api/gd/output/ipv6/result.m3u"
-    - "https://raw.bgithub.xyz/suxuang/myIPTV/refs/heads/main/ipv4.m3u"
-    - "https://raw.bgithub.xyz/suxuang/myIPTV/refs/heads/main/ipv6.m3u"
-    - "https://live.zbds.top/tv/iptv4.m3u"
-    - "https://raw.bgithub.xyz/YueChan/Live/refs/heads/main/APTV.m3u"
-    - "https://raw.bgithub.xyz/BurningC4/Chinese-IPTV/master/TV-IPV4.m3u"
-    - "https://raw.bgithub.xyz/Ftindy/IPTV-URL/main/bestv.m3u"
-    - "https://raw.bgithub.xyz/vamoschuck/TV/main/M3U"
-    - "https://raw.bgithub.xyz/Ftindy/IPTV-URL/main/cqyx.m3u"
-    - "https://raw.bgithub.xyz/Ftindy/IPTV-URL/main/yqgd.m3u"
-    - "https://raw.bgithub.xyz/Ftindy/IPTV-URL/main/IPTV.m3u"
-    - "https://raw.bgithub.xyz/Ftindy/IPTV-URL/main/hbgd.m3u"
-    - "https://raw.bgithub.xyz/Ftindy/IPTV-URL/main/msp.m3u"
-    - "https://live.zbds.top/tv/iptv6.txt"
-    - "https://live.zbds.top/tv/iptv6.m3u"
-    - "https://raw.bgithub.xyz/fanmingming/live/main/tv/m3u/ipv6.m3u"
-    - "https://live.fanmingming.cn/tv/m3u/ipv6.m3u"
-    - "https://raw.bgithub.xyz/YueChan/Live/main/IPTV.m3u"
-    - "https://raw.bgithub.xyz/whpsky/iptv/main/chinatv.m3u"
-    - "https://raw.bgithub.xyz/kimwang1978/collect-tv-txt/main/merged_output.m3u"
-    - "https://raw.bgithub.xyz/Kimentanm/aptv/master/m3u/iptv.m3u"
-    - "https://raw.bgithub.xyz/BigBigGrandG/IPTV-URL/release/Gather.m3u"
-    - "https://raw.bgithub.xyz/YanG-1989/m3u/main/Gather.m3u"
-    - "https://raw.bgithub.xyz/fanmingming/live/main/tv/m3u/v6.m3u"
-    - "https://raw.bgithub.xyz/Kimentanm/aptv/master/m3u/ya.m3u"
-    - "https://raw.bgithub.xyz/YanG-1989/m3u/main/yu.m3u"
-    - "https://live.fanmingming.com/tv/m3u/itv.m3u"
-    - "https://raw.githubusercontent.com/YueChan/Live/refs/heads/main/APTV.m3u"
-    - "https://raw.githubusercontent.com/Kimentanm/aptv/master/m3u/iptv.m3u"
-    - "https://raw.githubusercontent.com/BurningC4/Chinese-IPTV/master/TV-IPV4.m3u"
-    - "https://raw.githubusercontent.com/joevess/IPTV/main/m3u/iptv.m3u"
-    - "https://m3u.ibert.me/fmml_ipv6.m3u"
-    - "https://live.fanmingming.com/tv/m3u/ipv6Plus.m3u"
-    - "https://raw.githubusercontent.com/YueChan/Live/main/IPTV.m3u"
-    # 海外/国际源
-    - "https://epg.pw/test_channels_hong_kong.m3u"
-    - "https://epg.pw/test_channels_macau.m3u"
-    - "https://epg.pw/test_channels_taiwan.m3u"
-    - "https://iptv-org.github.io/iptv/countries/tw.m3u"
-    - "https://epg.pw/test_channels_singapore.m3u"
-    - "https://epg.pw/test_channels_malaysia.m3u"
-    - "https://raw.bgithub.xyz/Free-TV/IPTV/master/playlist.m3u8"
-    - "https://iptv-org.github.io/iptv/index.m3u"
-
   # ── 第 2 组：静态源里「可能出 4K」的 ──
   urls_static_4k:
     - "https://dxtx.hntv.tv/live/lypd.m3u8"
@@ -201,22 +102,23 @@ live:
   # 目录内优先级：文件越多越靠后加入，保持可预测顺序
   local_dir: "inputs"
 
-  # ── 清晰度配额：每频道各保留多少路 ──
+  # ── 清晰度配额：每频道各保留多少路（main 主 + backup 备）──
+  # 2160 → 4K 频道；1080 → 1080p；720 → 720p
+  # 合计上限 = main + backup = 12 路
   # 晚高峰 4K×4 + 1080p×5 + 720p×3 = 12
-  # 白天   4K×3 + 1080p×4 + 720p×2 = 9
+  # 白天   4K×4 + 1080p×5 + 720p×3 = 12
   res_quotas:
-    2160: 4
-    1080: 5
-    720: 3
+    2160: 4        # 4K 频道主线路
+    1080: 5        # 1080p 主线路
+    720: 3         # 720p 备用线路
 
-  # ── 各清晰度达标即停阈值（每频道每档）──
-  quota_4k_limit: 4
-  quota_1080_limit: 5
-  quota_720_limit: 3
+  # 晚高峰专用配额（不设则沿用 res_quotas）
+  # res_quotas_peak:
+  #   2160: 4
+  #   1080: 5
+  #   720: 3
 
-  # ── 每频道线路数：白天 / 晚高峰 ──
-  urls_per_channel: 9          # 白天
-  urls_per_channel_peak: 12    # 晚高峰
+  # 晚高峰时段（小时，24 制），hit 后用 res_quotas_peak
   peak_hours: [19, 20, 21, 22, 23]
 
   # ── 国内源加分 / 海外源降权（缓解晚间卡顿）──
@@ -235,14 +137,21 @@ live:
   concurrency: 50          # 并发连接数
   min_resolution: 720      # 最低分辨率，低于此值丢弃
   max_channels: 1000       # 最多保留的频道数量
-  candidates_per_channel: 30  # 每频道最多送入探测的候选线路数
   cache_dir: "sources_cache"
   cache_ttl_hours: 12
   fetch_timeout: 20        # 单次拉取超时（秒），直连 1 次 + 1 次重试
   static_res_bonus: 5
   stability_window: 10
 
-  # 以下参数已废弃，保留以避免旧配置报错
+  # ── v9.0 抓取阶段：去重 + 上限控制 ──
+  # 全局 URL 去重：同一 URL 在不同源里出现多次时只保留首次
+  url_dedup: true
+  # 抓取阶段最多保留频道数（按条目数排序，0=不限）
+  max_fetch_channels: 0
+  # 抓取阶段最多保留条目数（0=不限），超出后截断（去重之后生效）
+  max_fetch_urls: 0
+
+  # 以下参数已废弃（代码不读取），仅为兼容旧配置保留
   per_candidate_timeout: 8
   connect_timeout: 4
   max_candidates: 1
@@ -255,6 +164,17 @@ live:
     speed: 0.15
     delay: 0.15
     stability: 0.25
+
+# ============================================================
+#  探测参数
+# ============================================================
+probe:
+  # ── 探测候选池 ──
+  # 每频道送入探测的候选线路数：min 起步，max 封顶
+  # 国内源排在最前先测，达标后多余的不测，省 Actions 时长
+  candidate_pool:
+    min: 10
+    max: 30          # 每频道最多探测 20 条
 
 # ============================================================
 #  点播源发现
