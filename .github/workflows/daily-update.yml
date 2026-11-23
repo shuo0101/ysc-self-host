@@ -1,0 +1,136 @@
+name: 每日直播源更新
+
+'on':
+  schedule:
+    - cron: '0 18 * * *'   # UTC 18:00 = 北京时间次日 02:00
+  workflow_dispatch:
+    inputs:
+      force_refresh:
+        description: '强制刷新所有需鉴权源（忽略缓存）'
+        required: false
+        default: '0'
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装 ffmpeg（系统包）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 执行聚合
+        env:
+          FORCE_REFRESH: ${{ github.event.inputs.force_refresh || '0' }}
+        run: |
+          # 手动触发勾了「强制刷新」就真把源内容缓存清掉，否则这个开关是空转
+          # （aggregator.py 不读 FORCE_REFRESH，清理由这层负责）
+          # probe_cache.json 一并清：源都重抓了，旧探测结论没有复用价值
+          if [ "${FORCE_REFRESH}" = "1" ]; then
+            echo "⚠ FORCE_REFRESH=1，清空 sources_cache（保留目录）"
+            rm -f sources_cache/*.txt sources_cache/*.meta.json sources_cache/probe_cache.json sources_cache/*.tmp || true
+          fi
+          python aggregator.py --live
+
+      # ── CCTV 央视频道优先锁定自建源 ──
+      # 原理：cctv_grabber.py 会优先从自建服务（CCTVcom-Live / ysp-live）取
+      # CCTV 1~17 + 4K + 8K 的 m3u8，达标后锁定，这些频道不再走常规探测；
+      # 自建源不满足时退化为常规探测。产出 output/cctv.m3u，
+      # 随后被合并进 output/live.m3u 与 live.txt。
+      - name: 抓取 CCTV 央视频道（自建源优先）
+        id: cctv
+        continue-on-error: true
+        env:
+          CCTV_HOST: ${{ vars.CCTV_HOST || secrets.CCTV_HOST || 'http://localhost:8000' }}
+          CCTV_MIN_RES: '1080'
+          CCTV_FALLBACK: 'true'
+          CCTV_PROBE_SELF: 'true'
+        run: |
+          python cctv_grabber.py --epg "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${GITHUB_REF_NAME}/output/epg.xml"
+          [ -s output/cctv.m3u ] && echo "cctv_ok=true" >> $GITHUB_OUTPUT || echo "cctv_ok=false" >> $GITHUB_OUTPUT
+
+      - name: 合并 CCTV 自建源到直播输出
+        if: steps.cctv.outputs.cctv_ok == 'true'
+        run: python merge_cctv.py
+
+      - name: 汇总 CCTV 来源分布
+        if: always()
+        run: |
+          echo "## 本次 CCTV 央视频道来源" >> $GITHUB_STEP_SUMMARY
+          if [ -f output/cctv_report.txt ]; then
+            cat output/cctv_report.txt >> $GITHUB_STEP_SUMMARY
+          else
+            echo "本次未产出 CCTV 自建源（已退化为常规探测）" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 提交并推送
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # ── 清理过期缓存 ──
+          # 注意后缀：源内容缓存落盘是 <name>.txt + <name>.meta.json，
+          # 不是 .m3u（原来写 *.m3u 一条都匹配不到，等于没清）。
+          # probe_cache.json 由 .gitignore 排除，不提交也不按天数清理
+          # （它有自己的 TTL + 老化逻辑，见 aggregator.py probe_cache_purge）。
+          if [ -d sources_cache ]; then
+            find sources_cache -name "*.tmp" -delete 2>/dev/null || true
+            find sources_cache \( -name "*.txt" -o -name "*.meta.json" \) -mmin +4320 -delete 2>/dev/null || true
+          fi
+
+          [ -d output ] && git add output/ || true
+          # .gitignore 已排除 probe_cache.json / *.tmp，这里可以放心整目录 add
+          [ -d sources_cache ] && git add sources_cache/ || true
+
+          # 无变更：清空暂存区并退出（必须先 reset 再 exit，避免 index 脏）
+          if git diff --cached --quiet; then
+            git reset
+            echo "无变更，跳过提交"
+            exit 0
+          fi
+
+          # 有变更：先把暂存内容 stash 起来，保证 rebase 时 index 干净
+          git fetch origin "${GITHUB_REF_NAME}"
+
+          if ! git stash push -u -m "pre-rebase-$(date +%s)"; then
+            echo "stash 失败，放弃本次提交"
+            exit 0
+          fi
+
+          if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+            echo "⚠️ rebase 冲突，放弃本次提交（等待下次 cron 重试）"
+            git rebase --abort || true
+            git stash pop || true
+            exit 0
+          fi
+
+          # rebase 成功，恢复暂存内容，并重新 add 被 stash 带走的产物
+          git stash pop || true
+          [ -d output ] && git add output/ || true
+          [ -d sources_cache ] && git add sources_cache/ || true   # 同样受 .gitignore 过滤
+
+          if git commit -m "chore: auto update live sources [skip ci]"; then
+            if ! git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "首次 push 失败，重新 fetch + rebase 后重试"
+              git fetch origin "${GITHUB_REF_NAME}" && \
+              git rebase "origin/${GITHUB_REF_NAME}" && \
+              git push origin "HEAD:${GITHUB_REF_NAME}"
+            fi
+          fi
