@@ -1,5 +1,1 @@
-__pycache__/
-*.pyc
-cache/
-*.log
-data/sources.db
+# ── 探测结果缓存：短期数据，不入库 ──#  TTL 只有 10 分钟，每次运行都会整体重写。#  几 MB 的文件每天提交上百次，只会让仓库体积暴涨、diff 全是噪声。sources_cache/probe_cache.json# ── 缓存运行期临时文件 ──sources_cache/*.tmp# ── Python ──__pycache__/*.py[cod].venv/venv/*.egg-info/# ── 本地调试产物 ──cache/*.log.DS_StoreThumbs.db
