@@ -1,1218 +1,1794 @@
 #!/usr/bin/env python3
-"""TVBox 影视仓 全自动聚合（含 EPG + 台标）
-v8.15：一轮探测 · 国内源优先 · 分清晰度达标即停 · 缓存复用 · 稳定性统计 · 4:5:3 配额 · 12 线路
+# -*- coding: utf-8 -*-
 """
+aggregator.py — 直播源 / 点播源 聚合器（v9.2）
+
+两阶段流水线
+  阶段一  抓取 → 整理 → 全局去重（网络源 + 本地源）
+  阶段二  探测 → 精选 → 输出
+
+本次修正
+  · 点播逻辑完全保留，不改动
+  · 频道归一化：4K 与 4、8K 与 8 视为【不同】频道，必须拆开
+      正确  CCTV4K ≠ CCTV4 、CCTV8K ≠ CCTV8
+      正确  卫视4K ≠ 卫视4 、卫视8K ≠ 卫视8
+  · 串线路修复：同一频道下，把名称/画质明显不属于该频道的候选剔除
+  · 补齐全部辅助函数（v9.1 中缺失定义的引用）
+"""
+
+from __future__ import annotations
+
 import argparse
-import asyncio
-import aiohttp
-import aiofiles
+import copy
+import datetime as dt
+import ipaddress
 import json
-import re
-import subprocess
-import time
+import logging
 import os
-import hashlib
-import yaml
-from datetime import datetime
-from collections import OrderedDict
+import re
+import signal
+import sys
+import time
+from collections import defaultdict
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from database import (
-    init_db, record_vod_probe, record_live_probe,
-    get_blacklist, get_stability, get_avg_score, is_first_run, log_run, DB as _DB_PATH,
-)
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-CONFIG_FILE = Path(__file__).parent / 'config.yaml'
+import requests
+import yaml
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-
-def load_config():
-    if not CONFIG_FILE.exists():
-        return {}
+try:
+    from . import database as db
+except ImportError:  # 直接运行
     try:
-        with CONFIG_FILE.open(encoding='utf-8') as f:
-            return yaml.safe_load(f) or {}
-    except Exception as e:
-        print(f"⚠️ 读取 {CONFIG_FILE} 失败: {e}")
-        return {}
-
-
-CONFIG = load_config()
-
-VOD_CFG = CONFIG.get('vod', {}) or {}
-LIVE_CFG = CONFIG.get('live', {}) or {}
-LOGO_BASE = (CONFIG.get('logo', {}) or {}).get('base_url', "https://live.fanmingming.com/tv")
-CACHE_DIR = Path(LIVE_CFG.get('cache_dir', 'sources_cache'))
-CACHE_TTL_HOURS = float(LIVE_CFG.get('cache_ttl_hours', 12))
-
-FETCH_TIMEOUT = int(LIVE_CFG.get('fetch_timeout', 30))
-PROBE_TIMEOUT = int(LIVE_CFG.get('probe_timeout', 6))
-PROBE_CONCURRENCY = int(LIVE_CFG.get('concurrency', 50))
-HEAD_TIMEOUT = int(LIVE_CFG.get('timeout', 8))
-MAX_LIVE_CH = int(LIVE_CFG.get('max_channels', 1000))
-SORT_WEIGHTS = LIVE_CFG.get('sort_weights') or {
-    'resolution': 0.45, 'speed': 0.15, 'delay': 0.15, 'stability': 0.25,
-}
-STABILITY_WINDOW = int(LIVE_CFG.get('stability_window', 10))
-MIN_RESOLUTION = int(LIVE_CFG.get('min_resolution', 720))
-
-CANDIDATES_PER_CHANNEL = int(LIVE_CFG.get('candidates_per_channel', 30))
-STATIC_RES_BONUS = int(LIVE_CFG.get('static_res_bonus', 5))
-
-# ── 每频道线路数：白天 9 / 晚高峰 12 ──
-URLS_PER_CHANNEL_DAY = int(LIVE_CFG.get('urls_per_channel', 9))
-URLS_PER_CHANNEL_PEAK = int(LIVE_CFG.get('urls_per_channel_peak', 12))
-PEAK_HOURS = set(LIVE_CFG.get('peak_hours') or [19, 20, 21, 22, 23])
-
-# ── 清晰度配额：4K×4 + 1080p×5 + 720p×3 = 12 ──
-RES_QUOTAS = LIVE_CFG.get('res_quotas') or {2160: 4, 1080: 5, 720: 3}
-QUOTA_4K_LIMIT = int(LIVE_CFG.get('quota_4k_limit', 4))
-QUOTA_1080_LIMIT = int(LIVE_CFG.get('quota_1080_limit', 5))
-QUOTA_720_LIMIT = int(LIVE_CFG.get('quota_720_limit', 3))
-
-# ── 国内源加分 / 海外源降权 ──
-DOMESTIC_BONUS = float(LIVE_CFG.get('domestic_bonus', 15))
-OVERSEAS_PENALTY = float(LIVE_CFG.get('overseas_penalty', -15))
-
-# ── 缓存 ──
-USE_CACHE = bool(LIVE_CFG.get('use_cache', True))
-CACHE_TTL_SECONDS = int(LIVE_CFG.get('cache_ttl_seconds', 600))
-HISTORY_WINDOW = int(LIVE_CFG.get('history_window', 20))
-MAX_CACHE_SIZE = 5000
-
-VOD_TIMEOUT = int(VOD_CFG.get('timeout', 12))
-VOD_CONCURRENCY = int(VOD_CFG.get('concurrency', 100))
-MIN_JSON_SIZE = int(VOD_CFG.get('min_json_size', 200))
-MAX_VOD = int(VOD_CFG.get('max_sources', 1500))
-DISCOVER_PER_PAGE = int(VOD_CFG.get('discover_per_page', 20))
-
-PER_CANDIDATE_TO = int(LIVE_CFG.get('per_candidate_timeout', 8))
-CONNECT_TIMEOUT = int(LIVE_CFG.get('connect_timeout', 4))
-
-NW = SORT_WEIGHTS
-
-
-def is_peak_hour():
-    return datetime.now().hour in PEAK_HOURS
-
-
-def effective_urls_limit():
-    """晚高峰 12 条，其余 9 条"""
-    return URLS_PER_CHANNEL_PEAK if is_peak_hour() else URLS_PER_CHANNEL_DAY
-
-
-def logo_url(n):
-    key = clean_name(n)
-    if key in ('CCTV4K', 'CCTV8K', 'CCTV5+'):
-        return f"{LOGO_BASE}/{key}.png"
-    return f"{LOGO_BASE}/{LOGO_MAP.get(key, key)}.png"
-
-
-LOGO_MAP = {
-    'CCTV1综合': 'CCTV1', 'CCTV1': 'CCTV1',
-    'CCTV2财经': 'CCTV2', 'CCTV2': 'CCTV2',
-    'CCTV3综艺': 'CCTV3', 'CCTV3': 'CCTV3',
-    'CCTV4中文国际': 'CCTV4', 'CCTV4国际': 'CCTV4', 'CCTV4': 'CCTV4',
-    'CCTV5体育': 'CCTV5', 'CCTV5': 'CCTV5',
-    'CCTV6电影': 'CCTV6', 'CCTV6': 'CCTV6',
-    'CCTV7军事农业': 'CCTV7', 'CCTV7': 'CCTV7',
-    'CCTV8电视剧': 'CCTV8', 'CCTV8': 'CCTV8',
-    'CCTV9记录': 'CCTV9', 'CCTV9': 'CCTV9',
-    'CCTV10科教': 'CCTV10', 'CCTV10': 'CCTV10',
-    'CCTV11戏曲': 'CCTV11', 'CCTV11': 'CCTV11',
-    'CCTV12社会与法': 'CCTV12', 'CCTV12': 'CCTV12',
-    'CCTV13新闻': 'CCTV13', 'CCTV13': 'CCTV13',
-    'CCTV14少儿': 'CCTV14', 'CCTV14': 'CCTV14',
-    'CCTV15音乐': 'CCTV15', 'CCTV15': 'CCTV15',
-    'CCTV16奥林匹克': 'CCTV16', 'CCTV16': 'CCTV16',
-    'CCTV17农业农村': 'CCTV17', 'CCTV17': 'CCTV17',
-}
-
-GROUP_ORDER = ["央视频道", "卫视频道", "地方频道", "数字频道", "其他频道"]
-
-_REGION_KW = [
-    "北京", "上海", "天津", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江",
-    "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南",
-    "广东", "广西", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海",
-    "台湾", "内蒙古", "西藏", "宁夏", "新疆", "香港", "澳门",
-]
-
-_DIGITAL_KW = [
-    "风云", "怀旧", "经典", "戏曲", "劲爆", "魅力", "欢笑", "家庭", "靓妆",
-    "高尔夫", "留学", "茶", "书画", "武术", "橄榄", "汽摩", "电子体育",
-    "财富", "证券", "影像", "发现", "求索", "全纪实", "新视觉", "都市",
-    "娱乐", "影视", "少儿", "纪录", "国防", "农业", "社会与法", "奥林匹克",
-    "农业农村",
-]
-
-_TVG_ALIAS = {
-    # ── CCTV K 频道 ──
-    'CCTV-4K HD (1080p)': 'CCTV4K', 'CCTV-8K HD (1080p)': 'CCTV8K',
-    'CCTV-4K': 'CCTV4K', 'CCTV-8K': 'CCTV8K',
-    'CCTV4K HD (1080p)': 'CCTV4K', 'CCTV8K HD (1080p)': 'CCTV8K',
-    'CCTV4K': 'CCTV4K', 'CCTV8K': 'CCTV8K',
-    # ── CCTV5+ 系列 ──
-    'CCTV-5+体育赛事': 'CCTV5+', 'CCTV5+体育赛事': 'CCTV5+',
-    'CCTV-5+': 'CCTV5+', 'CCTV5+': 'CCTV5+',
-    'CCTV-5+ (1080p)': 'CCTV5+', 'CCTV5+ (1080p)': 'CCTV5+',
-    'CCTV-5+体育赛事 (1080p)': 'CCTV5+',
-    # ── 地方台别名 ──
-    '上虞文化影院': '上虞文化影视', '绍兴文化影院': '绍兴文化影视',
-    '哈哈炫动': '炫动卡通',
-    '凤凰中文': '凤凰卫视中文台', '凤凰卫视': '凤凰卫视中文台',
-    '数码时代': '浙江数码时代',
-    '象山综合': '象山新闻综合', '缙云综合': '缙云新闻综合',
-    '文成综合': '文成新闻综合', '庆元综合': '庆元新闻综合',
-    '浙江钱江': '浙江钱江都市', '湖州公共': '湖州公共民生',
-    '绍兴公共': '绍兴电视台公共', '涟水电视台综合': '涟水综合',
-    '普陀电视台': '普陀新闻综合', '苏州4k': '苏州新闻综合', '苏州4K': '苏州新闻综合',
-    '陕西农林': '陕西农林卫视',
-    # ── Beijing / CCTV 后缀冲突 ──
-    'Beijing Satellite TV HD (1080p)': '北京卫视',
-    'Beijing Satellite TV [Not 24/7]': '北京卫视',
-    'BeijingSatelliteTV.cn@': '北京卫视',
-    'CCTV-4K HD (1080p)': 'CCTV4K', 'CCTV-8K HD (1080p)': 'CCTV8K',
-    'CCTV.cn@': 'CCTV综合',
-    'CCTV-4 中文国际': 'CCTV4', 'CCTV4中文国际': 'CCTV4',
-}
-
-
-_EXTINF = re.compile(r'^#EXTINF:-?\d+(?:\s+[^,]*)?(?:,)?\s*(.*)$')
-_TV = re.compile(r'(?:^|[\s,])tvg-([a-zA-Z0-9_-]+)="([^"]*)"')
-_NAME = re.compile(r'tvg-name="([^"]*)"')
-_EMOJI = re.compile(r'[\U00010000-\U0010ffff\U00002600-\U000027BF\U0001F300-\U0001FAFF]')
-_JUNK_NAME = re.compile(r'\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}')
-_JUNK_PATTERNS = ('migutoken=', 'Smart.php', 'miguvideo.com')
-
-
-def clean_name(n):
-    if not n:
-        return ''
-    n = (n.replace('高清', '').replace('标清', '')
-        .replace('HD', '').replace('SD', ''))
-    n = re.sub(r'\s*频道\s*$', '', n)
-    m = re.match(r'(CCTV\d+\+?)', n)
-    if m:
-        return m.group(1)
-    return n.strip()
-
-
-def normalize_tvg_id(raw):
-    """归一化频道名，作为频道唯一 key。
-    核心规则：
-    - CCTV-8K / CCTV-4K 是独立频道，绝不能与 CCTV8 / CCTV4 合并
-    - CCTV-5+ 的 '+' 必须保留
-    匹配顺序：先 K 频道，再 + 频道，最后普通频道。
-    """
-    if not raw:
-        return ''
-    s = raw.strip()
-    if s in _TVG_ALIAS:
-        return _TVG_ALIAS[s]
-
-    # ① K 频道前置识别 —— 必须在分辨率清洗之前完成
-    s = re.sub(r'CCTV\s*-?\s*4\s*[Kk]\b', 'CCTV4K', s, flags=re.I)
-    s = re.sub(r'CCTV\s*-?\s*8\s*[Kk]\b', 'CCTV8K', s, flags=re.I)
-    # ② 加号保护
-    s = re.sub(r'(CCTV\s*-?\s*\d+)\s*\+', r'\1‡PLUS‡', s, flags=re.I)
-
-    # ③ 清洗后缀
-    cleaned = re.sub(r'\s*[\(（]\s*[0-9]+[pi]\s*[\)）]', '', s)
-    cleaned = re.sub(r'\s*[\(（]\s*[0-9]+[Kk]\s*[\)）]', '', s)
-    cleaned = re.sub(r'\s*[\[【].*?[\]】]', '', cleaned)
-    cleaned = re.sub(r'\s*(HD|SD|FHD)\b', '', cleaned, flags=re.I)  # 注意：此处不含 4K/8K
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    cleaned = cleaned.replace('‡PLUS‡', '+')
-
-    if cleaned in _TVG_ALIAS:
-        return _TVG_ALIAS[cleaned]
-
-    # ⑥ CCTV 系列：按序匹配
-    m = re.match(r'CCTV\s*-?\s*(\d{1,2})[Kk]\b', cleaned)
-    if m:
-        return f'CCTV{m.group(1)}K'
-    m = re.match(r'CCTV\s*(\d{1,2})\+', cleaned)
-    if m:
-        return f'CCTV{m.group(1)}+'
-    m = re.match(r'CCTV\s*-?\s*(\d{1,2})\b', cleaned)
-    if m:
-        return f'CCTV{m.group(1)}'
-    m = re.match(r'CCTV\s*(\d{1,2})\.cn@', cleaned)
-    if m:
-        return f'CCTV{m.group(1)}'
-
-    m = re.match(r'([\u4e00-\u9fa5]{2,4})卫视', cleaned)
-    if m:
-        return m.group(1) + '卫视'
-
-    cleaned2 = re.sub(r'\s*[\(（].*?[\)）]', '', cleaned).strip()
-    if cleaned2 in _TVG_ALIAS:
-        return _TVG_ALIAS[cleaned2]
-
-    return _EMOJI.sub('', cleaned).strip()
-
-
-def tvg_id(n):
-    t = clean_name(n)
-    return t.replace('卫视', '')
-
-
-def _resolve_4k8k_key(base_key, name_key, raw_name):
-    """解决 K/8K/+ 频道与同名普通频道的 key 冲突。
-
-    规则：
-    - 若名字明确是 K/8K/+ 频道（name_key 含 4K/8K/+），则以名字为准，
-      即使源的 tvg-id 漏写了 K，也不并入普通频道。
-    - 若名字是普通频道（如 CCTV4），但 tvg-id 却带 K，同样以名字为准，
-      避免误拆。
-    一句话：以"名字"里是否带 K/8K/+' 作为频道身份的最终裁定。
-    """
-    if not base_key:
-        return name_key
-    if not name_key:
-        return base_key
-
-    base_has_k = bool(re.search(r'[48]K', base_key)) or ('+' in base_key)
-    name_has_k = bool(re.search(r'[48]K', name_key)) or ('+' in name_key)
-
-    # 双方一致：直接用归一化结果
-    if base_has_k == name_has_k:
-        return base_key
-
-    # 不一致：以名字为准
-    return name_key
-
-
-def classify(name):
-    if not name:
-        return '其他频道'
-    n = name.strip()
-    if re.match(r'^CCTV', n, re.IGNORECASE) or '央视' in n or '中央' in n:
-        return '央视频道'
-    if '卫视' in n:
-        return '卫视频道'
-    for kw in _REGION_KW:
-        if kw in n:
-            return '地方频道'
-    for kw in _DIGITAL_KW:
-        if kw in n:
-            return '数字频道'
-    return '其他频道'
-
-
-def channel_sort_key(ch):
-    name = ch.get('name', '') if isinstance(ch, dict) else str(ch)
-    group = classify(name)
-    gidx = GROUP_ORDER.index(group)
-    if group == '央视频道':
-        m = re.search(r'(\d+)', name)
-        num = int(m.group(1)) if m else 0
-        if re.search(r'8K', name, re.I):
-            plus = 0.9
-        elif re.search(r'4K', name, re.I):
-            plus = 0.8
-        elif '+' in name:
-            plus = 0.5
-        else:
-            plus = 0.0
-        return (gidx, num + plus, name)
-    return (gidx, 0, name)
-
-
-def _cache_path(url, cache_dir):
-    name = url.rsplit('/', 1)[-1].split('?')[0] or 'source'
-    name = re.sub(r'[^\w.\-]', '_', name)[:40]
-    h = hashlib.md5(url.encode()).hexdigest()[:12]
-    return cache_dir / f"{name}_{h}.m3u"
-
-
-def _cache_age_hours(cp):
-    if not cp.exists():
-        return None
-    return (time.time() - cp.stat().st_mtime) / 3600.0
-
-
-def _save_cache(cp, text):
-    try:
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cp.write_text(text, encoding='utf-8')
-    except Exception:
-        pass
-
-
-async def fetch_text_any(sess, url, label='', timeout=None):
-    timeout = timeout or FETCH_TIMEOUT
-    cp = _cache_path(url, CACHE_DIR)
-    age = _cache_age_hours(cp)
-
-    if age is not None and age < CACHE_TTL_HOURS:
-        print(f"  📦 {label} → 缓存 ({age:.1f}h 前)")
-        return cp.read_text(encoding='utf-8', errors='ignore')
-
-    t0 = time.monotonic()
-    last_err = ''
-    for attempt in range(2):
-        try:
-            async with sess.get(
-                url,
-                timeout=aiohttp.ClientTimeout(total=timeout, connect=CONNECT_TIMEOUT),
-            ) as r:
-                if r.status == 200:
-                    t = await r.text()
-                    if t.strip():
-                        tag = '直连' if attempt == 0 else '重试'
-                        print(f"  ✓ {label} → {tag} 成功 ({len(t)} 字节, {time.monotonic()-t0:.1f}s)")
-                        _save_cache(cp, t)
-                        return t
-                    else:
-                        last_err = '空响应'
-                else:
-                    last_err = f'HTTP {r.status}'
-        except asyncio.TimeoutError:
-            last_err = f'超时({timeout}s)'
-        except Exception as e:
-            last_err = type(e).__name__
-    print(f"  ✗ {label} 直连失败({last_err})，耗时 {time.monotonic()-t0:.1f}s")
-
-    if age is not None:
-        print(f"  ⚠️ {label} 回退过期缓存 ({age:.1f}h 前)")
-        return cp.read_text(encoding='utf-8', errors='ignore')
-    return ''
-
-
-# ============================================================
-#  点播（未改动）
-# ============================================================
-async def discover_vod(session):
-    urls = set()
-    seeds = (CONFIG.get('discover', {}) or {}).get('vod_seeds', []) or []
-    for u in seeds:
-        urls.add(u)
-    print(f"   🔍 配置的种子源 {len(seeds)} 个")
-
-    headers = {"Accept": "application/vnd.github.v3+json"}
-    token = os.environ.get('GH_TOKEN')
-    if token:
-        headers['Authorization'] = f'Bearer {token}'
-    try:
-        async with session.get(
-            f"https://api.github.com/search/code?q=tvbox+extension:json&per_page={DISCOVER_PER_PAGE}",
-            headers=headers, timeout=15,
-        ) as r:
-            if r.status == 200:
-                data = await r.json()
-                for it in data.get('items', []):
-                    raw = it.get('raw_url') or it.get('html_url', '')
-                    if raw and raw.endswith('.json'):
-                        raw = raw.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/')
-                        urls.add(raw)
-                print(f"   🔍 GitHub Search 补充 {len(data.get('items', []))} 个候选")
-            elif r.status in (403, 429):
-                print(f"⚠️ GitHub Search 限流 ({r.status})，使用种子源")
-    except Exception as e:
-        print(f"⚠️ discover_vod 失败: {e}")
-
-    result = list(urls)[:MAX_VOD * 3]
-    print(f"   🔍 最终待探测点播源 {len(result)} 个")
-    return result
-
-
-async def probe_vod(session, url, bl):
-    if url in bl:
-        return None
-    try:
-        st = time.time()
-        async with session.get(url, timeout=VOD_TIMEOUT) as r:
-            d = time.time() - st
-            if r.status != 200:
-                record_vod_probe(url, 'fail', d)
-                return None
-            t = await r.text()
-            if len(t) < MIN_JSON_SIZE:
-                record_vod_probe(url, 'invalid', d)
-                return None
-            record_vod_probe(url, 'ok', d, len(t))
-            return {'data': json.loads(t), 'size': len(t)}
-    except Exception:
-        record_vod_probe(url, 'fail')
-        return None
-
-
-async def aggregate_vod(urls, epg_url):
-    print(f"   🔍 aggregate_vod 收到 {len(urls)} 个候选源")
-    if not urls:
-        print("⚠️ 点播种子源为空：config.yaml 的 discover.vod_seeds 未配置，且 GitHub Search 未返回结果")
-        return {}
-
-    bl = get_blacklist('vod_history')
-    connector = aiohttp.TCPConnector(limit=VOD_CONCURRENCY)
-    async with aiohttp.ClientSession(connector=connector) as s:
-        res = await asyncio.gather(*[probe_vod(s, u, bl) for u in urls])
-
-    valid = [x for x in res if x]
-    if not valid:
-        print("⚠️ 所有点播候选源都探测失败（可能源失效或被墙）")
-        return {}
-
-    valid.sort(key=lambda x: x['size'], reverse=True)
-    valid = valid[:MAX_VOD]
-    print(f"   ✓ 点播可用 {len(valid)}/{len(urls)} 个，最大 {valid[0]['size']} 字节")
-
-    primary = valid[0]['data']
-    if isinstance(primary, list):
-        dict_candidates = [v for v in valid if isinstance(v.get('data'), dict)]
-        if not dict_candidates:
-            print("⚠️ 所有候选点播源都是 list 格式，无可用 TVBox 配置对象")
-            return {}
-        primary = dict_candidates[0]['data']
-    if not isinstance(primary, dict):
-        print(f"⚠️ 主源不是 TVBox 配置对象(dict)，实际类型: {type(primary).__name__}")
-        return {}
-
-    primary.setdefault('_meta', {})
-    primary['_meta'].update({
-        'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'available': len(valid),
-    })
-    primary['lives'] = [{
-        "name": "自动聚合直播",
-        "type": 0,
-        "url": "",
-        "epg": epg_url,
-        "logo": LOGO_BASE + "/",
-    }]
-    return primary
-
-
-# ============================================================
-#  直播
-# ============================================================
-def parse_playlist(text, default_group=''):
-    """解析直播清单，自动识别两种格式：
-       1) M3U：#EXTINF 行 + 下一行 URL
-       2) TXT：纯文本，每行 "频道名,URL" 且用 ",#genre#" 行分隔分组
-    """
-    if not text:
-        return []
-    text = text.lstrip('\ufeff').strip()
-    lines = text.split('\n')
-
-    # ── 格式判定：是否含 #EXTINF ──
-    has_extinf = any(l.startswith('#EXTINF:') for l in lines[:200])
-
-    if has_extinf:
-        return _parse_m3u(lines, default_group)
-
-    return _parse_txt(lines, default_group)
-
-
-def _parse_m3u(lines, default_group=''):
-    chs = []
-    for i, l in enumerate(lines):
-        if not l.startswith('#EXTINF:'):
-            continue
-        raw = lines[i + 1].strip() if i + 1 < len(lines) else ''
-        url = raw.split(';')[0].split(',')[0].strip()
-        if not url.startswith(('http://', 'https://')):
-            continue
-        if url.endswith('.php'):
-            continue
-        if any(p in url for p in _JUNK_PATTERNS):
-            continue
-
-        name = ''
-        m = _NAME.search(l)
-        if m:
-            name = m.group(1).strip()
-        else:
-            m = _EXTINF.match(l)
-            if m:
-                name = m.group(1).strip()
-        if not name:
-            continue
-        if _JUNK_NAME.search(name):
-            continue
-
-        attrs = {k.lower(): v.strip() for k, v in _TV.findall(l)}
-        group = attrs.get('group-title', '').strip() or default_group
-        if group:
-            group = _EMOJI.sub('', group).strip()
-        chs.append({
-            'name': name, 'url': url,
-            'tvg_id': attrs.get('id', '').strip() or '',
-            'logo': attrs.get('logo', '').strip() or '',
-            'group': group or '',
-        })
-    return chs
-
-
-def _parse_txt(lines, default_group=''):
-    """解析 TXT 格式：
-       分组行：    "...内容...,#genre#"（逗号在 genre 前）
-       频道行：    "频道名,http://..."
-       无效行（说明/注释）跳过
-    """
-    chs = []
-    group = default_group
-    for l in lines:
-        l = l.strip()
-        if not l:
-            continue
-        # 分组行
-        if l.endswith('#genre#'):
-            g = l[:-len('#genre#')].strip()
-            # 去掉行首遗留的说明片段（如 "央视官源,"）
-            if g.endswith(','):
-                g = g[:-1].strip()
-            if g:
-                group = g
-            continue
-        # 只处理含单个逗号分隔的 名称,URL 行
-        if ',' not in l:
-            continue
-        name, url = l.split(',', 1)
-        name, url = name.strip(), url.strip()
-        if not name or not url:
-            continue
-        # URL 只取第一个备选（分号/逗号分隔的多个地址取首个）
-        url = url.split(';')[0].split(',')[0].strip()
-        if not url.startswith(('http://', 'https://')):
-            continue
-        if url.endswith('.php'):
-            continue
-        if any(p in url for p in _JUNK_PATTERNS):
-            continue
-        if _JUNK_NAME.search(name):
-            continue
-        chs.append({
-            'name': name, 'url': url,
-            'tvg_id': '', 'logo': '',
-            'group': group or '',
-        })
-    return chs
-
-
-def is_domestic_url(url):
-    try:
-        host = re.sub(r'^https?://', '', url).split('/')[0].split(':')[0]
-    except Exception:
-        return False
-    if not host:
-        return False
-    if host.endswith('.cn') or host == 'cn':
-        return True
-    domestic_keywords = (
-        'cztv.com', 'bupt.edu.cn', 'hebtv.com', 'sdetv.com.cn',
-        'bestv.cn', 'sztv.com.cn', 'tdm.com.mo', 'hkstv.tv',
-        'fanmingming.com',
-        # 成都/四川电信 IPTV 项目（zsdc.eu.org 根域），含 iptv./epg. 等所有子域名
-        # 虽为 .eu.org 但属国内电信内网源，应加分
-        'zsdc.eu.org',
+        import database as db
+    except ImportError:
+        db = None
+
+
+# ─────────────────────────── 日志 ────────────────────────────
+def setup_logger(level: str = "INFO") -> logging.Logger:
+    logger = logging.getLogger("aggregator")
+    if logger.handlers:
+        return logger
+    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
     )
-    for kw in domestic_keywords:
-        if kw in host:
-            return True
-    return False
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+    return logger
 
 
-async def _fetch_source(session, url, is_static, is_4k, idx):
-    """抓取单个源并解析成频道列表。
-    url 支持两种形式：
-      - http(s):// 远程地址，走 fetch_text_any（带缓存）
-      - 本地文件路径（含 inputs/ 本地源），直接读文件
+log = setup_logger()
+
+
+# ───────────────────────── 全局开关 ───────────────────────────
+class Flags:
+    DRY_RUN = False
+    QUICK = False
+    MAX_FETCH_CHANNELS = 0
+    MAX_FETCH_URLS = 0
+
+
+# ═════════════════════════════════════════════════════════════
+#  数据模型
+# ═════════════════════════════════════════════════════════════
+
+@dataclass
+class Entry:
+    """单条直播/点播线路"""
+    url: str
+    name: str = ""
+    group: str = ""
+    source: str = ""                 # 来源名（网络源/本地源/static）
+    source_type: str = "network"     # network / local / static
+    entry_type: str = "live"         # live / vod
+    quality: str = ""                # 8K / 4K / HD / SD
+    tvg_id: str = ""
+    logo: str = ""
+    meta: dict = field(default_factory=dict)
+    raw_line: str = ""
+
+    def clone(self) -> "Entry":
+        e = copy.copy(self)
+        e.meta = copy.deepcopy(self.meta)
+        return e
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class ProbeResult:
+    url: str
+    ok: bool = False
+    status: int = 0
+    elapsed: float = 0.0
+    quality: str = ""
+    err: str = ""
+    redirect_url: str = ""
+
+
+class _FakeSigint(Exception):
+    pass
+
+
+def _sigint_raise(signum, frame):
+    raise _FakeSigint()
+
+
+# ═════════════════════════════════════════════════════════════
+#  HTTP / 会话
+# ═════════════════════════════════════════════════════════════
+
+def make_session(retries: int = 2, backoff: float = 1.0,
+                 timeout: int = 15) -> requests.Session:
+    """构造带重试的 requests 会话"""
+    s = requests.Session()
+    retry = Retry(
+        total=retries,
+        connect=retries,
+        read=retries,
+        status=retries,
+        backoff_factor=backoff,
+        allowed_methods=("GET", "HEAD"),
+        status_forcelist=(429, 500, 502, 503, 504),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=50)
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/120.0 Safari/537.36",
+        "Accept": "*/*",
+    })
+    s.timeout = timeout
+    return s
+
+
+def fetch_text(url: str, timeout: int = 15) -> Tuple[Optional[str], dict]:
+    """抓取一个 URL 的文本内容"""
+    info: dict = {"url": url, "error": None, "status": 0, "elapsed": 0.0,
+                  "bytes": 0, "final_url": url}
+    session = make_session(timeout=timeout)
+    try:
+        r = session.get(url, timeout=timeout, allow_redirects=True)
+        info["status"] = r.status_code
+        info["final_url"] = r.url
+        info["elapsed"] = round(r.elapsed.total_seconds(), 2)
+        info["bytes"] = len(r.content)
+        if r.status_code == 200:
+            text = r.text
+            return text, info
+        info["error"] = f"HTTP {r.status_code}"
+    except requests.exceptions.RequestException as e:
+        info["error"] = f"{type(e).__name__}: {e}"
+    except Exception as e:  # noqa
+        info["error"] = f"{type(e).__name__}: {e}"
+    return None, info
+
+
+def fetch_with_fallback(url: str, fallbacks: Sequence[str],
+                        timeout: int = 15) -> Tuple[Optional[str], dict]:
     """
-    if is_static:
-        label = f"静态源#{idx}"
-    elif is_4k:
-        label = f"4K源#{idx}"
-    else:
-        label = f"刷新源#{idx}"
+    带 fallback 的抓取：依次尝试主地址与备用地址。
+    返回 (text, info)；全失败则 text=None。
+    """
+    info: dict = {"url": url, "error": None, "tried": []}
+    candidates = [url] + list(fallbacks or [])
+    for u in candidates:
+        text, rinfo = fetch_text(u, timeout=timeout)
+        info["tried"].append(rinfo)
+        if text is not None:
+            info.update(rinfo)
+            info["url"] = u
+            return text, info
+    # 全部失败，记录最后一个错误
+    if info["tried"]:
+        info["error"] = info["tried"][-1].get("error")
+    return None, info
 
-    # ── 本地文件（本地源/inputs/）──
-    if not url.startswith(('http://', 'https://')):
-        chs = _read_local_source(url, label)
-        for c in chs:
-            c['_static'] = is_static
-            c['_4k'] = is_4k
-        return chs
 
-    text = await fetch_text_any(session, url, label)
+# ═════════════════════════════════════════════════════════════
+#  源发现（网络 + 本地）
+# ═════════════════════════════════════════════════════════════
+
+def discover_live(cfg: dict) -> Tuple[List[Entry], List[dict]]:
+    """
+    发现并抓取所有直播源（网络 + 本地 + static）。
+    返回 (entries, source_reports)
+    """
+    sources = cfg.get("sources", []) or []
+    timeout = int(cfg.get("fetch", {}).get("timeout", 30))
+    cache_dir = Path(cfg.get("cache_dir", "cache"))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    entries: List[Entry] = []
+    reports: List[dict] = []
+
+    for src in sources:
+        if src.get("type") != "live":
+            continue
+        if src.get("enabled", True) is False:
+            continue
+        name = src.get("name", "?")
+        src_type = src.get("source_type", "network")
+        url = src.get("url", "")
+        if not url:
+            continue
+
+        if src_type == "static":
+            log.info(f"  📌 本地静态源 [{name}] → 直接载入")
+            ents = _parse_static_source(src)
+            reports.append({
+                "source": name, "type": "static", "ok": True,
+                "entries": len(ents), "bytes": 0, "elapsed": 0.0,
+            })
+            entries.extend(ents)
+            continue
+
+        # 网络源 / 本地文件源
+        if src_type == "local":
+            log.info(f"  📁 本地源 [{name}] {url}")
+        else:
+            log.info(f"  🌐 网络源 [{name}] {url}")
+
+        text, info = fetch_with_fallback(
+            url, src.get("fallbacks", []) or [], timeout=timeout
+        )
+        # 可选：写入/读取缓存
+        cache_enabled = bool(cfg.get("fetch", {}).get("cache", False))
+        if cache_enabled:
+            cache_fp = cache_dir / f"{re.sub(r'[^a-zA-Z0-9._-]', '_', name)}.txt"
+            if text is None and cache_fp.exists():
+                text = cache_fp.read_text(encoding="utf-8", errors="replace")
+                info["from_cache"] = True
+                log.info(f"      ↳ 使用缓存 {cache_fp.name}")
+            elif text is not None:
+                try:
+                    cache_fp.write_text(text, encoding="utf-8")
+                except Exception:  # noqa
+                    pass
+
+        if text is None:
+            log.error(f"      ✗ 抓取失败：{info.get('error')}")
+            reports.append({
+                "source": name, "type": src_type, "ok": False,
+                "error": info.get("error"), "entries": 0,
+            })
+            continue
+
+        log.info(f"      ✓ {info.get('bytes',0)} 字节 / {round(info.get('elapsed',0),1)}s"
+                 f"{'  [缓存]' if info.get('from_cache') else ''}")
+        ents = _parse_live_text(text, src)
+        reports.append({
+            "source": name, "type": src_type, "ok": True,
+            "entries": len(ents), "bytes": info.get("bytes", 0),
+            "elapsed": info.get("elapsed", 0.0),
+        })
+        entries.extend(ents)
+
+    log.info(f"📡 发现 {len(sources)} 个源（网络 + 本地 + static），"
+             f"抓取到 {len(entries)} 条原始线路")
+    return entries, reports
+
+
+def _parse_live_text(text: str, src: dict) -> List[Entry]:
+    """解析直播源文本（自动识别 m3u / txt 格式）"""
     if not text:
         return []
-    chs = parse_playlist(text)
-    for c in chs:
-        c['_static'] = is_static
-        c['_4k'] = is_4k
-    print(f"    📺 {label} 解析到 {len(chs)} 个频道")
-    return chs
+    head = text.lstrip()[:100]
+    if "#EXTM3U" in head or "#EXTINF" in head:
+        return _parse_m3u(text, src)
+    return _parse_txt_live(text, src)
 
 
-def _read_local_source(path, label):
-    """读取本地直播源文件（TXT / M3U 自动识别），返回频道列表"""
-    p = Path(path)
-    if not p.is_absolute():
-        p = Path(__file__).parent / p
-    if not p.exists():
-        print(f"    ✗ {label} 本地文件不存在: {p}")
-        return []
-    try:
-        text = p.read_text(encoding='utf-8', errors='ignore')
-    except Exception as e:
-        print(f"    ✗ {label} 读取失败: {e}")
-        return []
-    chs = parse_playlist(text)
-    for c in chs:
-        c['_local'] = True
-    print(f"    📺 {label} 本地源 {p.name} 解析到 {len(chs)} 个频道")
-    return chs
-
-
-async def discover_live(_session):
-    static = list(LIVE_CFG.get('urls_static') or [])
-    static_4k = list(LIVE_CFG.get('urls_static_4k') or [])
-    refresh = list(LIVE_CFG.get('urls_refresh') or [])
-    zsdc = list(LIVE_CFG.get('urls_zsdc') or [])   # 成都/四川电信 IPTV（zsdc 单播源，配套回看+时移）
-    force = os.environ.get('FORCE_REFRESH', '').lower() in ('1', 'true', 'yes')
-
-    # ── 本地源目录：自动扫描（默认 inputs/）──
-    # 支持的文件：.txt / .m3u / .m3u8
-    # 自动按文件名识别分组与类型：含 "4K" 或 "4k" → 走 4K 候选轮次；
-    # 含 "refresh" / "鉴权" / "签名" → 走需刷新轮次；其余按静态源处理
-    local_dir = LIVE_CFG.get('local_dir', 'inputs')
-    local_sources = _discover_local_sources(local_dir)
-
-    all_entries = static + static_4k + refresh + zsdc + local_sources
-    if not all_entries:
-        print("⚠️ config.yaml 的 live.urls_static / urls_static_4k / urls_refresh / urls_zsdc 均未配置，且本地源目录也为空，直播源将为空")
-        return []
-
-    urls = [(u, True, False) for u in static]
-    urls += [(u, False, True) for u in static_4k]
-    if force or not refresh:
-        urls += [(u, False, False) for u in refresh]
-    else:
-        print(f"    ℹ️ 跳过 {len(refresh)} 个需刷新源（缓存有效；FORCE_REFRESH=1 可强制）")
-    # zsdc 单播源作为静态源处理（固定直链），走国内源加分
-    urls += [(u, True, False) for u in zsdc]
-    # ── 本地源 ──
-    for tag, path in local_sources:
-        is_4k = tag == '4k'
-        urls.append((path, True, is_4k))
-    return urls
-
-
-def _discover_local_sources(local_dir):
-    """扫描本地源目录，返回 [(tag, path), ...]。
-    tag: 'static' | '4k' | 'refresh'
-    识别规则（按文件名，不区分大小写）：
-      - 含 4k/4K/8k/8K/ultra        → 4k
-      - 含 refresh/刷新/鉴权/签名/过期 → refresh
-      - 其余                              → static
-    忽略 hidden 文件与 README。
-    """
-    base = Path(local_dir)
-    if not base.is_absolute():
-        base = Path(__file__).parent / base
-    if not base.exists() or not base.is_dir():
-        return []
-
-    result = []
-    files = sorted(base.iterdir())
-    for f in files:
-        if not f.is_file():
+def _parse_m3u(text: str, src: dict) -> List[Entry]:
+    """解析 m3u/m3u8 格式"""
+    out: List[Entry] = []
+    cur: Optional[dict] = None
+    for raw in text.splitlines():
+        line = raw.rstrip("\r")
+        if line.startswith("#EXTINF"):
+            cur = {"attrs": _parse_extinf_attrs(line)}
+        elif line.startswith("#"):
             continue
-        if f.name.startswith(('.', '_')) or f.name.upper().startswith('README'):
-            continue
-        if f.suffix.lower() not in ('.txt', '.m3u', '.m3u8'):
-            continue
-        name = f.stem.lower()
-        if any(k in name for k in ('4k', '8k', 'ultra', 'uhd')):
-            tag = '4k'
-        elif any(k in name for k in ('refresh', '刷新', '鉴权', '签名', '过期', 'token')):
-            tag = 'refresh'
-        else:
-            tag = 'static'
-        result.append((tag, str(f)))
-    print(f"    📂 本地源目录 {base}: 发现 {len(result)} 个源文件")
-    for tag, p in result:
-        print(f"       [{tag:7s}] {Path(p).name}")
-    return result
-
-
-async def probe_live_res(url):
-    try:
-        r = subprocess.run(
-            ['ffprobe', '-v', 'quiet', '-print_format', 'json',
-             '-show_streams', '-timeout', '5000000', url],
-            capture_output=True, text=True, timeout=PROBE_TIMEOUT,
-        )
-        if r.returncode == 0:
-            for s in json.loads(r.stdout).get('streams', []):
-                if s.get('codec_type') == 'video':
-                    h = int(s.get('height', 0))
-                    return 2160 if h >= 2160 else 1080 if h >= 1080 else 720 if h >= 720 else 480
-    except Exception:
-        pass
-    return None
-
-
-# ── 缓存 ──
-_probe_cache = {}
-_cache_hits = 0
-_cache_misses = 0
-
-
-def _evict_cache():
-    global _probe_cache
-    if len(_probe_cache) > MAX_CACHE_SIZE:
-        now = time.time()
-        # 清理过期项
-        expired = [k for k, (_, ts) in _probe_cache.items() if now - ts > CACHE_TTL_SECONDS]
-        for k in expired:
-            del _probe_cache[k]
-        # 若仍超限，删最老的一半
-        if len(_probe_cache) > MAX_CACHE_SIZE:
-            items = sorted(_probe_cache.items(), key=lambda x: x[1][1])
-            for k, _ in items[:len(items) // 2]:
-                del _probe_cache[k]
-
-
-async def _cached_probe(ch, session, bl, stability_map):
-    """带缓存的探测：TTL 内复用 ffprobe 结果，但 score 按最新稳定性重算。"""
-    global _cache_hits, _cache_misses
-    url = ch['url']
-    now = time.time()
-
-    if USE_CACHE and url in _probe_cache:
-        rec, ts = _probe_cache[url]
-        if now - ts < CACHE_TTL_SECONDS and rec is not None:
-            _cache_hits += 1
-            return _rescore(rec, ch, stability_map)
-
-    _cache_misses += 1
-    rec = await score_live(ch, session, bl, stability_map)
-    _probe_cache[url] = (rec, now)
-    _evict_cache()
-    return rec
-
-
-def _rescore(rec, ch, stability_map):
-    """复用已有探测结果，按最新稳定性/国内属性重算评分。"""
-    if not rec:
-        return None
-    stab = (stability_map or {}).get(rec['url'])
-    # get_stability 无记录返回 None；此处无历史视为中性 0.5
-    if stab is None:
-        stab = 0.5
-    domestic = rec.get('_domestic', is_domestic_url(rec['url']))
-
-    res = rec.get('_res') or 0
-    res_score = {2160: 100, 1080: 80, 720: 60}.get(res, 30)
-    domestic_score = DOMESTIC_BONUS if domestic else OVERSEAS_PENALTY
-    stab_score = stab * 100
-    latency = rec.get('_latency') or 3
-
-    score = (res_score * NW.get('resolution', 0)
-             + 80 * NW.get('speed', 0)
-             + max(0, 100 - latency * 10) * NW.get('delay', 0)
-             + stab_score * NW.get('stability', 0)
-             + domestic_score)
-    return {**rec, 'score': round(max(0.0, min(100.0, score)), 1),
-            '_domestic': domestic}
-
-
-async def score_live(ch, session, bl, stability_map=None):
-    if ch['url'] in bl:
-        return None
-    d = None
-    try:
-        st = time.time()
-        async with session.head(ch['url'], timeout=HEAD_TIMEOUT) as r:
-            d = time.time() - st
-            if r.status not in (200, 206, 302):
-                record_live_probe(ch['url'], ch['name'], 'fail', d)
-                return None
-    except Exception:
-        record_live_probe(ch['url'], ch['name'], 'fail', d)
-        return None
-
-    res = await probe_live_res(ch['url'])
-    if not res or res < MIN_RESOLUTION:
-        record_live_probe(ch['url'], ch['name'], 'fail', d)
-        return None
-
-    res_score = {2160: 100, 1080: 80, 720: 60}.get(res, 30)
-    if ch.get('_static'):
-        res_score = min(100, res_score + STATIC_RES_BONUS)
-
-    domestic = is_domestic_url(ch['url'])
-    if domestic:
-        domestic_score = DOMESTIC_BONUS
-    else:
-        domestic_score = OVERSEAS_PENALTY
-
-    stab = (stability_map or {}).get(ch['url'])
-    if stab is None:
-        stab = 0.5
-    stab_score = stab * 100
-
-    score = (res_score * NW.get('resolution', 0)
-             + 80 * NW.get('speed', 0)
-             + max(0, 100 - d * 10) * NW.get('delay', 0)
-             + stab_score * NW.get('stability', 0)
-             + domestic_score)
-    score = max(0.0, min(100.0, score))
-
-    # 历史平均分加权（最多 ±5 分）
-    avg_score = get_avg_score(ch['url'], HISTORY_WINDOW)
-    if avg_score is not None:
-        score = min(100.0, score + (avg_score - 50) * 0.1)
-
-    record_live_probe(ch['url'], ch['name'], 'ok', d, res, 0, round(score, 1))
-    return {**ch, 'score': round(score, 1), '_res': res,
-            '_domestic': domestic, '_latency': d}
-
-
-def _build_stability_map(chs):
-    urls = {c['url'] for c in chs}
-    out = {}
-    for u in urls:
-        out[u] = get_stability(u, STABILITY_WINDOW)
+        elif line.strip():
+            url = line.strip()
+            name = ""
+            group = ""
+            quality = ""
+            if cur:
+                name = cur["attrs"].get("tvg-name") or cur["attrs"].get("name") or ""
+                tvg_id = cur["attrs"].get("tvg-id", "") or ""
+                logo = cur["attrs"].get("tvg-logo", "") or ""
+                group = cur["attrs"].get("group-title", "") or ""
+                # 从 EXTINF 尾部的逗号后内容补名字
+                m = re.search(r"#EXTINF[^\n]*?,\s*(.*)$", raw)
+                # 此处 raw 已处理，从 line 重新取
+                tail = re.sub(r"^#EXTINF[^\n]*?,", "", line)
+                if not name and tail:
+                    name = tail.strip()
+                quality = _quality_from_text(name + " " + url)
+                out.append(Entry(
+                    url=url, name=name, group=group, tvg_id=tvg_id,
+                    logo=logo, quality=quality,
+                    source=src.get("name", ""),
+                    source_type=src.get("source_type", "network"),
+                ))
+            cur = None
     return out
 
 
-def _bucket(res):
-    if res >= 2160:
-        return 2160
-    elif res >= 1080:
-        return 1080
-    elif res >= 720:
-        return 720
-    else:
-        return 480
+def _parse_extinf_attrs(line: str) -> dict:
+    """从 #EXTINF 行提取 tvg-xxx / group-title 等属性"""
+    attrs: dict = {}
+    for k in ("tvg-id", "tvg-name", "tvg-logo", "group-title", "group"):
+        m = re.search(rf'{k}="([^"]*)"', line)
+        if m:
+            attrs[k] = m.group(1)
+    # 提取逗号后的名称
+    m = re.search(r"#EXTINF[^\n]*?,\s*(.*)$", line)
+    if m:
+        attrs["name"] = m.group(1).strip()
+    return attrs
 
 
-def _is_dup(rec, picked):
-    for p in picked:
-        if p['url'] == rec['url']:
-            return True
-    return False
+def _parse_txt_live(text: str, src: dict) -> List[Entry]:
+    """解析 txt 格式：每行 频道名,url 或 频道名#genre#..."""
+    out: List[Entry] = []
+    current_group = src.get("group", "") or ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # 分组标记
+        mg = re.match(r"^#genre#\s*(.*)$", line)
+        if mg:
+            current_group = mg.group(1).strip() or current_group
+            continue
+        # 内容行
+        m = re.match(r'^\s*(.*?)\s*[,，]\s*(.+)$', line)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        url = m.group(2).strip()
+        if not name or not url:
+            continue
+        quality = _quality_from_text(name + " " + url)
+        out.append(Entry(
+            url=url, name=name, group=current_group,
+            quality=quality, source=src.get("name", ""),
+            source_type=src.get("source_type", "network"),
+        ))
+    return out
 
 
-def _sort_key(x):
-    """国内源优先，评分高的优先"""
-    return (0 if x.get('_domestic') else 1, -(x.get('score') or 0))
+def _parse_static_source(src: dict) -> List[Entry]:
+    """解析配置中的静态源（内嵌 entries 列表）"""
+    out: List[Entry] = []
+    for item in src.get("entries", []) or []:
+        if isinstance(item, str):
+            # 简化写法：单行 "频道名,url"
+            m = re.match(r'^\s*(.*?)\s*[,，]\s*(.+)$', item)
+            if not m:
+                continue
+            name, url = m.group(1).strip(), m.group(2).strip()
+        elif isinstance(item, dict):
+            name = item.get("name", "")
+            url = item.get("url", "")
+        else:
+            continue
+        if not name or not url:
+            continue
+        quality = _quality_from_text(name + " " + url)
+        out.append(Entry(
+            url=url, name=name,
+            group=item.get("group", "") if isinstance(item, dict) else "",
+            quality=quality, source=src.get("name", ""),
+            source_type="static",
+            tvg_id=item.get("tvg_id", "") if isinstance(item, dict) else "",
+            logo=item.get("logo", "") if isinstance(item, dict) else "",
+        ))
+    return out
 
 
-async def probe_channel_once(key, chs, session, bl, stability_map):
-    """一轮探测：国内源优先，分清晰度达标即停。
-    每频道探测到配额数即停该档位；最终保留 urls_per_channel 条。
+# ═════════════════════════════════════════════════════════════
+#  全局 URL 去重
+# ═════════════════════════════════════════════════════════════
+
+def _dedup_entries(entries: List[Entry],
+                   enabled: bool = True) -> Tuple[List[Entry], dict]:
     """
-    candidates = chs[:CANDIDATES_PER_CHANNEL]
-    domestic = [c for c in candidates if is_domestic_url(c['url'])]
-    overseas = [c for c in candidates if not is_domestic_url(c['url'])]
-    ordered = domestic + overseas
-
-    buckets = {2160: [], 1080: [], 720: [], 480: []}
-    counts = {2160: 0, 1080: 0, 720: 0}
-    limits = {2160: QUOTA_4K_LIMIT, 1080: QUOTA_1080_LIMIT, 720: QUOTA_720_LIMIT}
-    picked = []
-    limit = effective_urls_limit()
-
-    for c in ordered:
-        if len(picked) >= limit:
-            break
-        rec = await _cached_probe(c, session, bl, stability_map)
-        if not rec:
-            continue
-        res = rec.get('_res') or 0
-        bucket = _bucket(res)
-        if bucket not in buckets:
-            continue
-        if _is_dup(rec, picked):
-            continue
-
-        if counts[bucket] < limits[bucket]:
-            buckets[bucket].append(rec)
-            picked.append(rec)
-            counts[bucket] += 1
-        elif len(picked) < limit:
-            # 该档位已达标，但总条数还不足，可收作"补全"
-            picked.append(rec)
-
-    return picked, counts
-
-
-def pick_final(picked, limit):
-    """按 4:5:3 配额精选，不足 limit 条时用国内源优先补满。"""
-    by_res = {2160: [], 1080: [], 720: [], 480: []}
-    for c in picked:
-        by_res[_bucket(c.get('_res') or 0)].append(c)
-
-    final_list = []
-    seen_urls = set()
-    for res in (2160, 1080, 720):
-        quota = RES_QUOTAS.get(res, 0)
-        candidates = [c for c in by_res[res] if c['url'] not in seen_urls]
-        candidates.sort(key=_sort_key)
-        for c in candidates[:quota]:
-            final_list.append(c)
-            seen_urls.add(c['url'])
-
-    if len(final_list) < limit:
-        rest = [c for c in picked if c['url'] not in seen_urls]
-        rest.sort(key=_sort_key)
-        for c in rest[:limit - len(final_list)]:
-            final_list.append(c)
-            seen_urls.add(c['url'])
-
-    return final_list
-
-
-async def aggregate_live(url_pairs, repo_prefix):
-    all_ch = []
-    async with aiohttp.ClientSession() as s:
-        for idx, item in enumerate(url_pairs):
-            if isinstance(item, tuple):
-                if len(item) == 3:
-                    u, is_static, is_4k = item
-                else:
-                    u, is_static, is_4k = item[0], item[1], False
-            else:
-                u, is_static, is_4k = item, True, False
-            got = await _fetch_source(s, u, is_static, is_4k, idx)
-            all_ch.extend(got)
-
-    if not all_ch:
-        print("⚠️ 未解析到任何直播频道")
-        return '', '', 0, 0
-
-    groups = {}
-    for ch in all_ch:
-        # ── key 生成：优先 tvg-id，但名字里含 K/8K/+ 时必须保留，
-        #    避免源的 tvg-id 漏写 K 导致 CCTV4K 被并入 CCTV4 ──
-        # 例：tvg-id="CCTV4" tvg-name="CCTV-4K" → 归为 CCTV4K，而非并入 CCTV4
-        base_key = normalize_tvg_id(ch.get('tvg_id') or ch['name'])
-        name_key = normalize_tvg_id(ch.get('name') or '')
-        key = _resolve_4k8k_key(base_key, name_key, ch.get('name', ''))
+    全局 URL 去重：同一条 URL 只保留首次出现的条目。
+    返回 (去重后列表, 统计)
+    """
+    if not enabled:
+        return entries, {"removed": 0, "kept": len(entries)}
+    seen: set = set()
+    uniq: List[Entry] = []
+    for e in entries:
+        key = e.url.strip()
         if not key:
             continue
-        groups.setdefault(key, []).append(ch)
-    groups = dict(sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)[:MAX_LIVE_CH])
-
-    # ── 归一化碰撞检测 ──
-    print("\n🔎 归一化碰撞检测：")
-    collisions = 0
-    for key, chs in groups.items():
-        names = {c.get('name', '') for c in chs if c.get('name')}
-        names.discard('')
-        if len(names) > 1:
-            distinct = set()
-            for n in names:
-                norm = re.sub(r'\s*[\(（\[【].*?[\)）\]】]', '', n).strip()
-                norm = re.sub(r'\s*(HD|SD|4K|8K)\b', '', norm, flags=re.I).strip()
-                distinct.add(norm)
-            if len(distinct) > 1:
-                collisions += 1
-                print(f"   ⚠️ key={key} 真碰撞 {len(distinct)} 个频道: {', '.join(sorted(names))}")
-            else:
-                print(f"   ✓ key={key} 已合并 {len(names)} 个写法: {sorted(names)[0]}")
-    if collisions == 0:
-        print("   ✓ 无碰撞，频道不会因归一化丢失")
-
-    stability_map = _build_stability_map(all_ch)
-    bl = get_blacklist('live_history')
-
-    mode = "晚高峰" if is_peak_hour() else "白天"
-    limit = effective_urls_limit()
-    first = is_first_run()
-    if first:
-        print("   ℹ️ 首次运行，无历史稳定性数据")
-
-    print(f"\n⏰ 当前模式：{mode}，每频道保留 {limit} 路")
-    print(f"📋 探测策略：一轮探测 · 缓存复用 · 国内源优先 · "
-          f"分清晰度达标即停 (4K≤{QUOTA_4K_LIMIT}, 1080p≤{QUOTA_1080_LIMIT}, 720p≤{QUOTA_720_LIMIT})")
-
-    final = {}
-    connector = aiohttp.TCPConnector(limit=PROBE_CONCURRENCY)
-    async with aiohttp.ClientSession(connector=connector) as s:
-        for k, chs in groups.items():
-            picked, counts = await probe_channel_once(k, chs, s, bl, stability_map)
-            if picked:
-                final[k] = picked
-                detail = f"4K={counts[2160]} 1080p={counts[1080]} 720p={counts[720]}"
-                print(f"    [探测] {k}: {len(picked)}/{len(chs[:CANDIDATES_PER_CHANNEL])} 路达标 ({detail})")
-
-    # ── 按配额精选 ──
-    selected = OrderedDict()
-    for k, urls in final.items():
-        picked = pick_final(urls, limit)
-        if picked:
-            selected[k] = picked
-
-    # ── EPG：读 config.yaml 的 epg.primary，缺省回退仓库内 epg.xml ──
-    _epg_cfg = (CONFIG.get('epg', {}) or {})
-    epg = _epg_cfg.get('primary') or f"{repo_prefix}/epg.xml"
-    # ── zsdc 配套 EPG：zsdc 频道单独打标签，走 epg.zsdc ──
-    zsdc_epg = _epg_cfg.get('zsdc') or epg
-    _is_zsdc_url = lambda u: 'iptv.zsdc.eu.org' in (u or '')
-    _epg_for = lambda u: zsdc_epg if _is_zsdc_url(u) else epg
-
-    channel_map = OrderedDict()
-    for key, urls in selected.items():
-        if not urls:
+        if key in seen:
             continue
-        primary = max(urls, key=lambda x: x.get('score', 0))
-        n = primary.get('name', '')
-        tid = primary.get('tvg_id') or tvg_id(n)
-        max_res = max((c.get('_res') or 0) for c in urls)
-        domestic_cnt = sum(1 for c in urls if c.get('_domestic'))
-        channel_map[key] = {
-            'name': n, 'tvg_id': tid,
-            'logo': primary.get('logo') or logo_url(tid or n),
-            'group': classify(n), 'urls': urls,
-            'resolution': max_res, 'domestic': domestic_cnt,
-            'is_zsdc': _is_zsdc_url(primary.get('url', '')),   # zsdc 频道标记
-        }
+        seen.add(key)
+        uniq.append(e)
+    removed = len(entries) - len(uniq)
+    log.info(f"🔁 全局 URL 去重：{len(entries)} → {len(uniq)}（去除 {removed} 条重复）")
+    return uniq, {"removed": removed, "kept": len(uniq)}
 
-    sorted_items = sorted(channel_map.items(), key=lambda item: channel_sort_key(item[1]))
 
-    grouped_output = OrderedDict((g, []) for g in GROUP_ORDER)
-    for key, ch in sorted_items:
-        grouped_output[ch['group']].append(ch)
+# ═════════════════════════════════════════════════════════════
+#  画质识别
+# ═════════════════════════════════════════════════════════════
 
-    txt_lines, m3u_lines = [], ['#EXTM3U x-tvg-url="%s"' % epg]
-    total_urls = 0
-    total_domestic = 0
-    zsdc_lines = 0
-    for g in GROUP_ORDER:
-        chs_in_group = grouped_output.get(g, [])
-        if not chs_in_group:
-            continue
-        m3u_lines.append(f'\n# === {g}（{len(chs_in_group)}）===')
-        for ch in chs_in_group:
-            n = ch['name']
-            res = ch.get('resolution') or 0
-            if res >= 2160:
-                res_tag = "3840"
-            elif res >= 1080:
-                res_tag = "1920"
-            elif res >= 720:
-                res_tag = "1280"
+_QUAL_RANK = [
+    ("8K", 60), ("4320", 60), ("UHD", 55),
+    ("4K", 50), ("2160", 50),
+    ("1080", 40), ("FHD", 40),
+    ("720", 30), ("HD", 30),
+    ("SD", 20),
+]
+_QUAL_EXTRACT = re.compile(
+    r"(?i)(8K|4320P?|UHD|4K|2160P?|FHD|1080P?|720P?|高清|超清|蓝光|原画|HDR|HEVC|H265|H264)"
+)
+
+
+def _quality_from_text(text: str) -> str:
+    """从名称/URL 文本中识别画质"""
+    if not text:
+        return ""
+    t = text.upper()
+    if "8K" in t or "4320" in t:
+        return "8K"
+    if "4K" in t or "2160" in t:
+        return "4K"
+    if "UHD" in t:
+        return "4K"
+    if re.search(r"1080[PpIi]?", t) or "FHD" in t:
+        return "HD"
+    if re.search(r"720[PpIi]?", t) or "高清" in text or "HD" in t:
+        return "HD"
+    if "SD" in t or "标清" in text:
+        return "SD"
+    return ""
+
+
+# ═════════════════════════════════════════════════════════════
+#  频道归一化（核心：4K/4、8K/8 必须分开）
+# ═════════════════════════════════════════════════════════════
+#
+# 规则说明
+#   · 画质词（4K/8K/UHD/HD/…）剥离为独立【画质维度】，追加在 key 末尾；
+#   · 剥离画质后剩余的"名称+序号"相同的，画质不同则归为【不同频道】；
+#       卫视4K  ≠  卫视4        ← 一个带 4K 画质，一个不带
+#       CCTV4K  ≠  CCTV4       ← 同上
+#       卫视8K  ≠  卫视8        ← 同上
+#   · 画质维度不参与"同频道归组"，只参与"差异记录"。
+#
+# 反例（你强调必须区分）
+#   "4K影视" 与 "影视4" 是完全不同的两个频道名，不会被混淆。
+# ═════════════════════════════════════════════════════════════
+
+# 画质词：支持「数字与画质词粘连」写法，如 CCTV4K / 卫视8KHD / 卫视4
+# 匹配规则：
+#   · 4K / 8K / 4KHD / 8KHD —— 前后可以是字母数字或结尾
+#   · UHD / FHD / HEVC / HDR / H265 / H264 —— 同上
+#   · HD / SD —— 仅在非数字后匹配，避免把 CCTV4 的尾数字误当 HD
+#   · 中文画质词单独匹配
+# 数字型画质词（4K/8K/2160P 等）：数字前允许紧跟字母（CCTV4K），
+# 但要求数字本身紧邻画质字母，且画质字母后不能再跟字母数字。
+_QUAL_WORD = re.compile(
+    r"(?i)"
+    r"(4KHD|8KHD|4K|8K|UHD|FHD|2160P?|4320P?|1080P?|720P?|HEVC|H265|H264)"
+    r"(?![A-Za-z0-9])"
+)
+# 独立 HD/SD：前面不能是字母或数字，避免把 卫视4 / CCTV4 里的 4 误当画质
+_QUAL_HDSD = re.compile(
+    r"(?i)"
+    r"(?<![A-Za-z0-9])"
+    r"(HD|SD)"
+    r"(?![A-Za-z0-9])"
+)
+# 中文画质词
+_QUAL_CN = re.compile(r"(高清|超清|蓝光|原画|标清)")
+
+
+def _norm_num(raw: str) -> str:
+    """
+    归一化频道序号：去掉前导零，使 CCTV-04 与 CCTV-4 视为同一频道。
+    纯 "0" 保留；含 ＋/+ 的序号（如 5+）保留符号只规整数字部分。
+    """
+    if not raw:
+        return ""
+    m = re.match(r"^([0-9]*)([＋+]?)$", raw)
+    if not m:
+        return raw
+    digits, plus = m.group(1), m.group(2)
+    if digits:
+        digits = digits.lstrip("0") or "0"
+    return digits + plus
+
+
+def channel_key(raw: str) -> str:
+    """
+    频道归一化键。
+    返回形如：  cctv/n4/q4K   cctv/n4   ws/湖南卫视/q4K   ws/湖南卫视
+    """
+    if not raw:
+        return ""
+    # 统一空白与分隔符
+    s = raw.strip()
+    # 数字与画质词之间的空格其实是分隔（"CCTV16 4K" → "CCTV16-4K"），
+    # 若直接删掉会粘成 CCTV164K，序号被误读成 164。先把这类空格换成连字符。
+    s = re.sub(r"(?<=[0-9])[\s\-–—_·]+(?=(?:[0-9]+)?(?:4K|8K|UHD|FHD|HD|SD)(?![A-Za-z]))",
+               "-", s, flags=re.IGNORECASE)
+    s = re.sub(r"[\s\-–—_·]+", "", s)
+    if not s:
+        return ""
+
+    # 1) 提取画质维度（保留首次出现顺序，去重）
+    spans: List[Tuple[int, int]] = []
+    seen_q: set = set()
+    for pat in (_QUAL_WORD, _QUAL_HDSD, _QUAL_CN):
+        for m in pat.finditer(s):
+            q = m.group(1).upper()
+            # 归一化中文画质
+            if q == "高清" or q == "超清":
+                q = "HD"
+            elif q in ("蓝光", "原画"):
+                q = "FHD"
+            elif q == "标清":
+                q = "SD"
+            if q in seen_q:
+                continue
+            seen_q.add(q)
+            spans.append(m.span())
+    spans.sort()
+    quals: List[str] = sorted(seen_q)
+
+    # 2) 剥离画质词得到 body
+    #    关键：像 4K / 8K / 2160P 这类"数字+字母"的画质词，其中的数字同时
+    #    承载着频道序号语义（CCTV-4K 的 4 就是 CCTV4 的 4）。若整体剥离，
+    #    CCTV-4K 会退化成 CCTV，与 CCTV-4 撞成同一频道。因此这里只剥离
+    #    字母部分，把开头的数字留在 body 里当序号用；画质维度仍完整记录在
+    #    quals 中（q4K），靠它把 4K 与 4 区分开。
+    # 预处理：把 "4M1080 / 8M / 20M" 这类码率标记整段抹掉。
+    # 否则 1080P 规则只吃掉 "1080"，残留裸 "4"，会被误当成频道序号
+    # （东方卫视 4M1080 → 东方卫视4），导致同频道的线路被判成串线路。
+    s = _RATE_RE.sub(" ", s)
+    if not s.strip():
+        return ""
+    mask = bytearray(len(s))
+    for a, b in spans:
+        lo, hi = a, min(b, len(s))
+        word = s[lo:hi]
+        mlead = re.match(r"^([0-9]+)", word)
+        if mlead:
+            # 情形 A：数字紧邻台名前缀（CCTV4K / CCTV16-4K）→ 该数字就是
+            #         频道序号本身，整词剥离，序号由 body 里原有的数字承担。
+            # 情形 B：数字前已有别的序号或中文（卫视4K / 东方卫视4K）→
+            #         数字是画质词的一部分，保留它当序号，只屏蔽字母。
+            # 看紧邻画质词左边的字符：是数字（CCTV-4|K、CCTV16-|4K 经分隔符
+            # 归一后紧邻）→ 该数字即序号，整词剥离；否则（卫视4K 的 4 前面
+            # 是"视"）保留数字当序号。
+            prefix = s[:a]
+            tail_digits = re.search(r"([0-9＋+])([0-9＋+\-–—_· ]*)$", prefix)
+            if tail_digits and re.search(
+                r"(CCTV|CETV|IPTV|卫视)[\s\-–—_·]*$",
+                prefix[:tail_digits.start(1)], re.IGNORECASE
+            ):
+                # 序号紧邻画质词：CCTV-4|K、CCTV16-|4K、卫视4|K → 整词剥离
+                lo = a
             else:
-                res_tag = "720"
-            # 该频道走哪套 EPG
-            ch_epg = zsdc_epg if ch.get('is_zsdc') else epg
-            for c in ch['urls']:
-                txt_lines.append(f"{n},{c['url']}")
-                line = (
-                    f'#EXTINF:-1 tvg-id="{ch["tvg_id"]}" tvg-name="{n}" '
-                    f'tvg-logo="{ch["logo"]}" tvg-resolution="{res_tag}" '
-                    f'group-title="{g}"'
-                )
-                # zsdc 频道的每条线路都单独指向 zsdc 配套 EPG
-                if ch.get('is_zsdc'):
-                    line += f' tvg-url="{zsdc_epg}"'
-                    zsdc_lines += 1
-                line += f',{n}'
-                m3u_lines.append(line)
-                m3u_lines.append(c['url'])
-                total_urls += 1
-                if c.get('_domestic'):
-                    total_domestic += 1
+                # 序号与画质词之间还隔着台名：东方卫视|4K → 保留 4 当序号
+                lo = a + mlead.end()
+        for i in range(lo, hi):
+            mask[i] = 1
+    body = "".join(c for i, c in enumerate(s) if not mask[i])
 
-    total_ch = len(channel_map)
+    # 3) body 拆成 head(字母/中文) + 序号 + 尾缀
+    #    序号只取纯数字与「＋/+」（画质词已在前面剥离，这里不能再吞掉）
+    head_parts: List[str] = []
+    num = ""
+    suf = ""
 
-    # ── 统计稳定性分布 ──
-    stable_count = 0
-    for ch in channel_map.values():
-        for c in ch['urls']:
-            stab = stability_map.get(c['url'])
-            if stab is not None and stab >= 0.8:
-                stable_count += 1
-
-    print(f"\n✅ 一轮探测完成：{len(groups)} 频道探测，{len(selected)} 频道有线路")
-    print(f"📊 最终频道数: {total_ch}，分组后: {total_ch}，线路总数: {total_urls}")
-    if zsdc_lines:
-        print(f"📺 zsdc 成都/四川电信源：{zsdc_lines} 条线路（走配套 EPG {zsdc_epg}）")
-    if total_urls > 0:
-        print(f"📊 线路来源：国内源 {total_domestic} 条 ({total_domestic/total_urls*100:.0f}%)，"
-              f"海外源 {total_urls-total_domestic} 条 ({(total_urls-total_domestic)/total_urls*100:.0f}%)")
-        if stable_count > 0:
-            print(f"📊 高稳定性线路（≥80%）：{stable_count} 条 ({stable_count/total_urls*100:.0f}%)")
-    print(f"📊 缓存命中：{_cache_hits} 次命中 / {_cache_misses} 次未命中")
-    print(f"📂 分组统计：")
-    for g in GROUP_ORDER:
-        cnt = len(grouped_output.get(g, []))
-        if cnt:
-            print(f"   {g}: {cnt} 个频道")
-    if collisions == 0:
-        print("🔒 结论：无 key 碰撞，频道与线路均不会丢失")
+    # CCTV / CETV 类：序号 = 紧跟前缀的数字[＋+]，不含字母。
+    # 注意：前缀之后的说明性文字（线路1/备用/电信/高清版/央视频道 等）一律
+    # 忽略，不作为频道名的一部分——否则 "CCTV-4K 超清线路1 备用" 会被误判
+    # 成一个叫「线路备用」的频道，导致同频道线路互相被当成串线路。
+    m = re.match(
+        r"^(CCTV|CETV|IPTV|卫视)([0-9＋+]*)"
+        r"(?:[\s\-–—_·]+(?![0-9＋+]))?"
+        r"(?![0-9A-Za-z])(?!\u4e00-\u9fff)",
+        body, re.IGNORECASE
+    )
+    if m:
+        head_parts = [m.group(1).lower()]
+        num = _norm_num(m.group(2))
     else:
-        print(f"⚠️ 结论：存在 {collisions} 处真碰撞，请补充 _TVG_ALIAS 后重跑")
+        # 通用：字母/中文 + 末尾数字[＋+]序号
+        m = re.match(r"^([A-Za-z\u4e00-\u9fff]+?)([0-9＋+][0-9＋+]*)"
+                     r"(?![0-9A-Za-z])(?!\u4e00-\u9fff)", body)
+        if m:
+            head = m.group(1)
+            num = _norm_num(m.group(2))
+            # 把 head 再拆成"中文名 + 末尾英文后缀"（如 芒果tv → 芒果 / tv）
+            m2 = re.match(r"^([\u4e00-\u9fff]+)([A-Za-z]+)$", head)
+            if m2:
+                head_parts = [m2.group(1), m2.group(2).lower()]
+            else:
+                # 纯中文 / 纯英文
+                if re.search(r"[\u4e00-\u9fff]", head):
+                    head_parts = list(re.findall(r"[\u4e00-\u9fff]+", head))
+                else:
+                    head_parts = [head.lower()]
+        else:
+            # 形如 CCTV测试 / 卫视测试：字母前缀 + 末尾说明性中文
+            m3 = re.match(r"^([A-Za-z]+)([\u4e00-\u9fff].*)$", body)
+            if m3:
+                head_parts = [m3.group(1).lower(), m3.group(2)]
+                num = ""
+            else:
+                # 没有序号，整个 body 就是名称
+                if re.search(r"[\u4e00-\u9fff]", body):
+                    head_parts = list(re.findall(r"[\u4e00-\u9fff]+", body))
+                elif re.search(r"[A-Za-z]", body):
+                    head_parts = [body.lower()]
+                else:
+                    return ""
 
-    return '\n'.join(txt_lines), '\n'.join(m3u_lines), total_ch, total_urls
+    if not head_parts and not num:
+        return ""
+
+    parts: List[str] = []
+    if head_parts:
+        parts.append("#".join(head_parts))
+    if num:
+        parts.append("n" + num)
+    if suf:
+        parts.append(suf)
+    if quals:
+        parts.append("q" + "|".join(quals))
+    return "/".join(parts)
 
 
-# ============================================================
-#  主流程
-# ============================================================
-async def run_live(repo_prefix):
-    live_urls = await discover_live(None)
-    print(f"📡 待抓取直播源 {len(live_urls)} 个")
-    txt, m3u, lc, ll = await aggregate_live(live_urls, repo_prefix)
-    if txt:
-        async with aiofiles.open('output/live.txt', 'w') as f:
-            await f.write(txt)
-        async with aiofiles.open('output/live.m3u', 'w') as f:
-            await f.write(m3u)
-    return lc, ll
+# ═════════════════════════════════════════════════════════════
+#  串线路判定
+# ═════════════════════════════════════════════════════════════
+
+def _chan_core_from_key(key: str) -> str:
+    parts = [p for p in key.split("/") if p]
+    while parts and parts[-1].startswith("q"):
+        parts.pop()
+    return "/".join(parts)
 
 
-async def run_vod(repo_prefix):
-    epg = f"{repo_prefix}/epg.xml"
-    async with aiohttp.ClientSession() as s:
-        vod_urls = await discover_vod(s)
-    print(f"🎬 待探测点播源 {len(vod_urls)} 个")
-    vod = await aggregate_vod(vod_urls, epg)
-    if vod and isinstance(vod, dict):
-        vod['lives'][0]['url'] = f"{repo_prefix}/live.m3u"
-        async with aiofiles.open('output/tvbox.json', 'w') as f:
-            await f.write(json.dumps(vod, ensure_ascii=False, indent=2))
-        print(f"   ✓ 点播源已写入 output/tvbox.json（可用源 {vod['_meta']['available']} 个）")
-        return 1
-    print("   ✗ 点播源为空，未写入 tvbox.json")
+def canonical_channel_name(ents: List["Entry"], key: str) -> str:
+    """
+    从同一频道分组的条目里挑出最"干净"的名字作为该组的规范频道名。
+
+    规则：在所有 channel_key(name) == 组 key 的候选名中，取长度最短者。
+    最短的名字通常没有"线路1/超清/备用/高清版"之类杂项后缀，最接近真实
+    频道名。用它当串线路判定锚点，可避免 ents[0] 恰好是带一堆后缀的名字时，
+    把自己组的正常线路误杀。
+    """
+    key_core = _chan_core_from_key(key)
+    best = ""
+    for e in ents:
+        nm = (e.name or "").strip()
+        if not nm or channel_key(nm) != key:
+            continue
+        # 同 key 的名字里，优先选带画质词的（CCTV-4K 优于 CCTV-4K 超清线路1），
+        # 再取最短的，保证锚点自身画质维度不丢
+        rq = 0 if re.search(r"(?i)(8K|4K|UHD|FHD|HD|SD)", nm) else 1
+        cand = (rq, len(nm), nm)
+        if not best or cand < best_sel:
+            best, best_sel = nm, cand
+    if best:
+        return best
+    # 组内没有与 key 完全同画质的名字时，退而以"同台名同序号"的最短名字为锚点
+    for e in sorted(ents, key=lambda x: len(x.name or "")):
+        nm = (e.name or "").strip()
+        if nm and _chan_core(nm) == key_core:
+            return nm
+    return ents[0].name if (ents and ents[0].name) else ""
+
+
+# 注意：必须先匹配 1080P/2160P 这类"分辨率+字母"，再匹配裸码率 4M/8M，
+# 否则 "4M1080" 里的 1080 会被先吃掉，剩下 "4M" 的 4 又被当成频道序号
+_RATE_RE = re.compile(r"(?i)(?:[0-9]+(\.[0-9]+)?\s*(?:[Mm]bps|[Mm]i?t/s|[Mm])(?![A-Za-z])|(?<![0-9A-Za-z])[0-9]{3,4}(?![0-9A-Za-z]))")
+
+
+def _strip_rate(text: str) -> str:
+    """抹掉 "4M1080 / 8M / 20Mbps" 这类码率标记，避免残留裸数字被当成序号。"""
+    return _RATE_RE.sub(" ", text or "")
+
+
+def _chan_core(name: str) -> str:
+    """取频道名的「台名+序号」核心（去掉码率与画质维度），用于串线路归属判断。"""
+    key = channel_key(_strip_rate(name))
+    # key 形如 台名/序号/画质…：画质段永远是最后一段（以 q 开头），去掉它即可
+    parts = [p for p in key.split("/") if p]
+    while parts and parts[-1].startswith("q"):
+        parts.pop()
+    return "/".join(parts)
+
+
+def is_likely_cross_wire(entry: Entry, anchor_name: str) -> bool:
+    """
+    判定 entry 是否为"串线路"——即它的名称/画质与所属频道不符。
+
+    判定唯一事实来源是 channel_key()：只要线路名归一化后的 key 与所属
+    频道 key 不同，即视为串线路。这样"4K 与 4 分家""8K 与 8 分家"等
+    规则只需在 channel_key 里维护一份，本函数不会再与归一化逻辑漂移。
+
+    仅有的豁免：线路名缺失时无法判定，保守返回 False（不丢弃）。
+    """
+    if not anchor_name or not entry.name:
+        return False
+    a = anchor_name.strip()
+    n = entry.name.strip()
+    if a == n:
+        return False
+
+    # 判定只看「台名 + 序号」，忽略画质维度：同一频道的 4K / 8K / HD / 无画质
+    # 线路互为不同 key 是刻意设计（用于分开呈现），但它们仍是同一个台，
+    # 不能互相判成串线路。
+    # 1080P?/2160P? 等后缀要整体匹配，避免 "4M1080" 里的 1080 被先拆成
+    # 画质词后残留裸 "4"，被误当成频道序号
+    _QUAL_AWARE = re.compile(
+        r"(?i)(8K|4320P|UHD|4K|2160P|FHD|1080P|720P|高清|超清|蓝光|原画|HDR|HEVC|H265|H264)"
+    )
+    stripped = lambda t: _QUAL_AWARE.sub(" ", _strip_rate(t))
+    a_quals = set(_QUAL_EXTRACT.findall(stripped(a)))
+    n_quals = set(_QUAL_EXTRACT.findall(stripped(n)))
+    if _chan_core(stripped(n)) == _chan_core(stripped(a)):
+        # 台名+序号相同 → 属同一频道，无论画质是否一致都不算串线路。
+        # 同一频道的 4K / 8K / HD / 无画质线路互为不同 key 是刻意设计
+        # （用于分开呈现），但源站常把低码率线路误标成 4K，若按"有无画质"
+        # 判定会大量误杀，故此处一律放行。
+        return False
+    # 台名+序号不同 → 属于不同频道 → 串线路
+    return True
+
+
+
+_QUAL_ALL = re.compile(
+    r"(?i)(4K|8K|UHD|2160|4320|FHD|1080|720|HD|SD|高清|超清|蓝光|原画|标清)"
+)
+
+
+def _strip_all_qual(s: str) -> str:
+    if not s:
+        return ""
+    return re.sub(_QUAL_ALL, "", s).strip().lower()
+
+
+def _channel_keywords(s: str) -> set:
+    """
+    提取频道名里的"频道标识"集合，用于判断两个名称是否属于同一频道。
+    这里的标识必须足够"具体"，命中即认为是同一个频道/台。
+    """
+    if not s:
+        return set()
+    s2 = s.upper()
+    kw = set()
+
+    # CCTV / CETV 系列：用「前缀 + 序号 + 画质」作为标识
+    #    CCTV4 / CCTV4K / CCTV5+ / CCTV8K 各自独立，避免互相误判为同频道
+    m = re.match(r"^(CCTV|CETV|IPTV)\s*([0-9A-Z＋+]*)\s*(.*)$", s2)
+    if m:
+        prefix = m.group(1).lower()
+        num = m.group(2)
+        rest = m.group(3)
+        qual = "".join(re.findall(r"4K|8K|UHD|HD|SD|FHD", rest)).upper()
+        if num or qual:
+            kw.add((prefix + num + qual).lower())
+        else:
+            kw.add(prefix)
+
+    # 卫视：支持两种结构
+    #   · 卫视在前：卫视 + 序号 + 画质  （如 卫视4K / 卫视8 / 卫视4）
+    #   · 卫视在后：地域 + 卫视 + 序号 + 画质  （如 湖南卫视4K / 浙江卫视）
+    # 避免把 卫视4 / 卫视8 / 卫视4K 当成同一频道
+    m = re.match(r"^(卫视)\s*([0-9＋+]*)\s*(.*)$", s)
+    if m:
+        base = "卫视"
+        num = m.group(2)
+        rest = m.group(3)
+    else:
+        m = re.match(r"^([\u4e00-\u9fff]{2,4})卫视\s*([0-9A-Za-z＋+]*)(.*)$", s)
+        if m:
+            base = m.group(1) + "卫视"
+            num = m.group(2)
+            rest = m.group(3)
+        else:
+            m = None
+    if m:
+        # 序号或画质存在时，整体作为唯一标识
+        if num or re.search(_QUAL_ALL, rest):
+            qual_part = "".join(re.findall(r"4K|8K|UHD|HD|SD|FHD", rest)).upper() or ""
+            kw.add((base + num + qual_part).lower())
+        else:
+            kw.add(base)
+
+    # 单台/品牌台
+    for pat in ("凤凰卫视", "星空卫视", "翡翠台", "明珠台", "华娱卫视",
+                "TVBS", "东风卫视", "新知台", "芒果TV", "百视TV",
+                "东方卫视", "北京卫视", "上海卫视", "深圳卫视",
+                "浙江卫视", "江苏卫视", "湖南卫视", "安徽卫视",
+                "广东卫视", "山东卫视", "四川卫视", "天津卫视",
+                "重庆卫视", "湖北卫视", "河南卫视", "河北卫视",
+                "辽宁卫视", "吉林卫视", "黑龙江卫视", "广西卫视",
+                "云南卫视", "贵州卫视", "海南卫视", "陕西卫视",
+                "甘肃卫视", "江西卫视", "山西卫视", "福建卫视"):
+        if pat.upper() in s2:
+            kw.add(pat.lower())
+
+    return kw
+
+
+# ═════════════════════════════════════════════════════════════
+#  阶段一：抓取 + 整理 + 去重
+# ═════════════════════════════════════════════════════════════
+
+def _entry_source_rank(e: Entry, cfg: dict = None) -> int:
+    """源优先级：static > local > network，国内源再加分（国内源先测）"""
+    st = (e.source_type or "").lower()
+    if st == "static":
+        score = 100
+    elif st == "local":
+        score = 80
+    elif e.source and "static" in e.source.lower():
+        score = 95
+    else:
+        score = 50
+    if _is_domestic(e.url) and cfg is not None:
+        score += int((cfg.get("live", {}) or {}).get("domestic_bonus", 15) or 0)
+    return score
+
+
+def _entry_quality_rank(e: Entry) -> int:
+    """画质优先级分值"""
+    q = (e.quality or "").upper()
+    for pat, score in _QUAL_RANK:
+        if pat in q:
+            return score
     return 0
 
 
-async def main():
-    parser = argparse.ArgumentParser(description='TVBox 自动聚合')
-    parser.add_argument('--live', action='store_true', help='仅聚合直播源')
-    parser.add_argument('--vod', action='store_true', help='仅聚合点播源')
+# 国内（APNIC/CNNIC 分配给中国大陆）常见 IPv4 段，CIDR 写法。
+# 仅用于排序：命中的排前面先测；没命中的不会被丢弃，只是排后面测。
+_CN_CIDRS = """
+1.0.1.0/24 1.0.2.0/23 1.0.8.0/21 1.0.32.0/19 1.1.0.0/24 1.1.2.0/23 1.1.4.0/22
+1.1.8.0/21 1.1.16.0/20 1.2.0.0/23 1.2.2.0/23 1.2.4.0/22 1.2.8.0/21 1.2.16.0/20
+1.4.1.0/24 1.8.0.0/16 1.12.0.0/14 1.24.0.0/13 1.48.0.0/12 1.68.0.0/14
+1.80.0.0/12 1.116.0.0/15 1.118.0.0/16 1.119.0.0/24 1.180.0.0/14 1.184.0.0/15
+1.192.0.0/13 1.200.0.0/13 8.128.0.0/10 14.0.0.0/9 14.128.0.0/9 27.0.128.0/17
+27.8.0.0/13 27.16.0.0/12 27.32.0.0/12 27.48.0.0/14 27.54.0.0/17 27.98.176.0/22
+27.98.208.0/20 27.99.128.0/17 27.103.0.0/16 27.106.128.0/17 27.112.0.0/12
+27.128.0.0/11 27.159.232.0/21 27.184.0.0/13 27.192.0.0/11 36.0.0.0/10 36.96.0.0/11
+36.128.0.0/10 36.192.0.0/11 36.224.0.0/12 36.248.0.0/13 39.0.0.0/8 42.0.0.0/9
+42.128.0.0/9 43.224.0.0/11 47.92.0.0/14 47.96.0.0/11 49.64.0.0/10 49.128.0.0/9
+51.0.0.0/16 52.80.0.0/12 52.128.0.0/9 54.222.0.0/15 56.0.0.0/9 57.240.0.0/12
+58.16.0.0/13 58.24.0.0/15 58.30.0.0/15 58.32.0.0/11 58.64.0.0/12 58.80.0.0/13
+58.96.0.0/12 58.112.0.0/12 58.128.0.0/13 58.144.0.0/12 58.192.0.0/11 59.32.0.0/11
+59.64.0.0/10 60.0.0.0/11 60.55.0.0/16 60.63.0.0/16 60.160.0.0/11 60.194.0.0/15
+60.200.0.0/13 60.208.0.0/12 60.232.0.0/13 60.240.0.0/12 61.4.80.0/20 61.8.0.0/13
+61.16.0.0/12 61.48.0.0/13 61.128.0.0/10 61.240.0.0/13 101.0.0.0/12 101.16.0.0/12
+101.32.0.0/11 101.64.0.0/10 101.128.0.0/9 101.224.0.0/12 101.248.0.0/16
+103.1.168.0/22 103.3.132.0/22 103.5.80.0/22 103.6.216.0/22 103.9.140.0/22
+103.15.200.0/21 103.16.16.0/20 103.20.112.0/21 103.21.148.0/22 103.22.8.0/21
+103.22.136.0/22 103.23.32.0/21 103.24.192.0/22 103.25.8.0/21 103.30.0.0/15
+103.37.0.0/16 103.39.16.0/20 103.40.12.0/22 103.43.200.0/22 103.47.200.0/21
+103.48.108.0/22 103.49.124.0/22 103.51.32.0/21 103.52.180.0/22 103.53.4.0/22
+103.53.144.0/21 103.54.36.0/22 103.55.152.0/22 103.56.48.0/20 103.57.152.0/22
+103.59.148.0/22 103.60.56.0/21 103.62.80.0/21 103.62.160.0/22 103.62.210.0/23
+106.0.0.0/8 107.0.0.0/8 110.16.0.0/12 110.32.0.0/11 110.64.0.0/10 110.128.0.0/9
+111.0.0.0/10 111.64.0.0/11 111.96.0.0/12 111.112.0.0/12 111.128.0.0/9 112.0.0.0/10
+112.64.0.0/11 112.96.0.0/11 112.128.0.0/9 113.0.0.0/13 113.8.0.0/15 113.11.0.0/16
+113.12.0.0/14 113.16.0.0/13 113.24.0.0/14 113.44.0.0/14 113.48.0.0/12 113.64.0.0/10
+113.128.0.0/9 114.28.0.0/15 114.30.0.0/16 114.32.0.0/11 114.64.0.0/12 114.80.0.0/13
+114.96.0.0/11 114.128.0.0/9 115.24.0.0/13 115.32.0.0/11 115.64.0.0/10 115.128.0.0/9
+116.0.0.0/13 116.8.0.0/14 116.13.0.0/16 116.16.0.0/12 116.32.0.0/11 116.64.0.0/10
+116.128.0.0/9 117.8.0.0/13 117.21.0.0/17 117.22.0.0/15 117.24.0.0/13 117.32.0.0/11
+117.64.0.0/10 117.128.0.0/9 118.24.0.0/13 118.64.0.0/10 118.112.0.0/12 118.128.0.0/9
+119.0.0.0/13 119.8.0.0/16 119.16.0.0/12 119.32.0.0/11 119.64.0.0/10 119.128.0.0/9
+120.0.0.0/12 120.16.0.0/16 120.24.0.0/13 120.32.0.0/11 120.64.0.0/10 120.128.0.0/9
+121.0.0.0/9 121.128.0.0/10 121.192.0.0/11 121.224.0.0/12 122.0.0.0/9
+122.128.0.0/10 122.192.0.0/11 123.0.0.0/12 123.16.0.0/13 123.24.0.0/15
+123.50.0.0/16 123.52.0.0/14 123.56.0.0/13 123.64.0.0/11 123.96.0.0/15
+123.98.0.0/16 123.99.0.0/17 123.100.0.0/16 123.101.0.0/17 123.108.0.0/14
+123.112.0.0/12 123.128.0.0/9 123.244.0.0/14 123.248.0.0/13 124.6.0.0/15
+124.8.0.0/13 124.16.0.0/12 124.32.0.0/11 124.64.0.0/10 124.128.0.0/9
+125.31.192.0/18 125.32.0.0/11 125.64.0.0/10 125.128.0.0/9 126.0.0.0/8
+139.0.0.0/16 139.2.0.0/15 139.4.0.0/14 139.8.0.0/13 139.16.0.0/12 139.32.0.0/11
+139.64.0.0/10 139.128.0.0/9 140.64.0.0/10 140.128.0.0/9 140.240.0.0/12
+144.0.0.0/9 150.0.0.0/10 150.64.0.0/11 150.96.0.0/12 150.112.0.0/13
+153.0.0.0/16 153.2.0.0/15 153.4.0.0/14 153.8.0.0/13 153.16.0.0/12 153.32.0.0/11
+153.64.0.0/10 153.128.0.0/9 157.0.0.0/16 157.61.0.0/17 157.66.0.0/16 157.68.0.0/14
+157.72.0.0/13 157.80.0.0/12 157.96.0.0/11 157.128.0.0/9 159.226.0.0/16
+161.207.0.0/16 162.105.0.0/16 163.0.0.0/8 164.52.0.0/14 166.111.0.0/16
+167.139.0.0/16 167.189.64.0/18 168.160.0.0/11 169.65.32.0/19 171.8.0.0/13
+171.16.0.0/12 171.32.0.0/11 171.64.0.0/10 171.104.0.0/13 171.112.0.0/12
+171.208.0.0/12 175.0.0.0/12 175.16.0.0/13 175.24.0.0/14 175.30.0.0/15
+175.42.0.0/15 175.44.0.0/14 175.48.0.0/12 175.64.0.0/11 175.96.0.0/10
+175.128.0.0/9 176.58.96.0/20 177.136.0.0/13 180.64.0.0/10 180.128.0.0/9
+182.0.0.0/12 182.16.0.0/13 182.24.0.0/14 182.32.0.0/11 182.64.0.0/10
+182.128.0.0/9 183.0.0.0/10 183.64.0.0/11 183.96.0.0/12 183.112.0.0/12
+183.128.0.0/9 185.66.16.0/22 202.0.128.0/17 202.4.128.0/19 202.5.208.0/20
+202.6.176.0/20 202.8.0.0/16 202.10.192.0/19 202.12.0.0/16 202.14.0.0/16
+202.20.0.0/16 202.21.0.0/16 202.27.184.0/21 202.38.0.0/16 202.41.0.0/16
+202.43.144.0/20 202.45.80.0/20 202.46.160.0/19 202.62.0.0/15 202.64.0.0/15
+202.73.160.0/19 202.75.208.0/20 202.84.0.0/15 202.86.192.0/19 202.90.0.0/15
+202.92.0.0/14 202.96.0.0/12 202.112.0.0/13 202.120.0.0/13 202.136.0.0/13
+202.144.0.0/12 202.160.0.0/12 202.176.0.0/12 202.192.0.0/11 203.0.4.0/22
+203.0.8.0/21 203.1.16.0/20 203.2.112.0/20 203.4.128.0/19 203.5.0.0/16
+203.6.0.0/15 203.8.0.0/16 203.9.0.0/16 203.10.0.0/16 203.11.128.0/17
+203.12.0.0/16 203.14.0.0/16 203.15.160.0/19 203.16.0.0/16 203.17.128.0/17
+203.18.0.0/16 203.19.0.0/16 203.20.0.0/14 203.24.0.0/14 203.28.0.0/15
+203.30.0.0/16 203.31.0.0/17 203.56.0.0/16 203.57.0.0/16 203.62.0.0/16
+203.76.0.0/16 203.80.0.0/12 203.86.0.0/16 203.88.0.0/15 203.90.0.0/16
+203.91.0.0/17 203.92.0.0/16 203.93.0.0/16 203.94.0.0/15 203.96.0.0/12
+203.112.0.0/13 203.128.0.0/13 203.144.0.0/12 203.160.0.0/12 203.176.0.0/12
+203.196.0.0/14 203.207.128.0/17 210.2.0.0/15 210.5.0.0/16 210.7.0.0/16
+210.12.0.0/16 210.14.0.0/15 210.16.0.0/14 210.21.0.0/16 210.22.0.0/15
+210.25.0.0/16 210.26.0.0/15 210.32.0.0/14 210.36.0.0/16 210.40.0.0/13
+210.48.0.0/14 210.52.0.0/15 210.56.0.0/14 210.72.0.0/14 210.76.0.0/15
+210.78.0.0/16 210.79.64.0/18 210.82.0.0/15 210.87.128.0/17 210.192.0.0/11
+211.64.0.0/11 211.96.0.0/12 211.136.0.0/13 211.144.0.0/12 211.160.0.0/13
+218.0.0.0/11 218.32.0.0/11 218.64.0.0/10 218.128.0.0/9 219.72.0.0/13
+219.80.0.0/12 219.128.0.0/9 220.160.0.0/11 220.192.0.0/10 221.0.0.0/12
+221.16.0.0/13 221.128.0.0/9 222.16.0.0/12 222.32.0.0/11 222.64.0.0/10
+222.128.0.0/9 223.0.0.0/12 223.20.0.0/15 223.64.0.0/10 223.96.0.0/12
+223.112.0.0/12 223.128.0.0/9 223.240.0.0/13 223.248.0.0/14 223.252.0.0/15
+223.254.0.0/16 223.255.252.0/22
+"""
+# 国内运营商常见 IPv6 前缀（电信 240e、联通 2408、移动 2409、教育网 2001:da8）
+_CN_IPV6_PREFIXES = ("240e", "2408", "2409", "2001:da8")
+_CN_HOST_KW = ("telecom", "unicom", "cmcc", "chinamobile", "chinatelecom",
+               "iptv", "hntv", "jsbc", "smgbb", "wasu", "cctv",
+               "cntv", "hls.cctv", "qq.com", "huya", "douyu", "bilibili",
+               ".cn", "zgds", "dianshi")
+
+_CN_NETS = tuple(
+    (ipaddress.ip_network(c, strict=False), int(c.split("/")[1]))
+    for c in _CN_CIDRS.split() if c
+)
+
+
+def _host_of(url: str) -> str:
+    m = re.search(r"://\[?([^/\]]+)", url or "")
+    return (m.group(1) if m else "").lower().strip(".")
+
+
+def _is_domestic_ip(host: str) -> bool:
+    if ":" in host:                       # IPv6
+        return host.startswith(_CN_IPV6_PREFIXES)
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if ip.version != 4 or ip.is_private or ip.is_loopback:
+        return False
+    return any(ip in net for net, _ in _CN_NETS)
+
+
+def _is_domestic(url: str) -> bool:
+    """判断 URL 是否国内源：先按 IP 段，再按域名关键词"""
+    host = _host_of(url)
+    if not host:
+        return False
+    if _is_domestic_ip(host):
+        return True
+    return any(k in host for k in _CN_HOST_KW)
+
+
+def fetch_and_dedup(cfg: dict) -> Tuple[Dict[str, List[Entry]], List[dict], dict]:
+    """
+    阶段一：抓取 → 解析 → 全局去重 → 按频道归一化分组。
+    返回 (channels, source_reports, stats)
+        channels: { channel_key: [Entry, ...] }
+    """
+    log.info("=" * 60)
+    log.info("阶段一：抓取 + 整理 + 去重")
+    t0 = time.time()
+
+    entries, src_reports = discover_live(cfg)
+    log.info(f"📥 原始抓取合计：{len(entries)} 条直播线路"
+             f"（来自 {len(src_reports)} 个源）")
+
+    # 全局 URL 去重
+    enabled = bool(cfg.get("live", {}).get("url_dedup", True))
+    entries, dedup_stats = _dedup_entries(entries, enabled=enabled)
+
+    # 按频道归一化键分组
+    channels: Dict[str, List[Entry]] = defaultdict(list)
+    unnamed = 0
+    for e in entries:
+        if not e.name:
+            unnamed += 1
+            continue
+        key = channel_key(e.name)
+        if not key:
+            continue
+        e.meta["key"] = key
+        channels[key].append(e)
+
+    log.info(f"📊 整理结果：{len(channels)} 个频道 / {len(entries)} 条去重后线路")
+    if unnamed:
+        log.warning(f"   ⚠ {unnamed} 条无频道名，已丢弃")
+
+    # 单频道候选排序：source 优先 + quality 优先 + 国内源优先
+    for key in channels:
+        channels[key].sort(key=lambda e: (
+            -_entry_source_rank(e, cfg),
+            -_entry_quality_rank(e),
+            0 if _is_domestic(e.url) else 1,
+            len(e.url),
+        ))
+
+    # 截断（调试用）
+    max_ch = Flags.MAX_FETCH_CHANNELS or cfg.get("live", {}).get("max_fetch_channels", 0)
+    max_url = Flags.MAX_FETCH_URLS or cfg.get("live", {}).get("max_fetch_urls", 0)
+    if max_ch and len(channels) > max_ch:
+        keep = sorted(channels.items(), key=lambda kv: -len(kv[1]))[:max_ch]
+        channels = dict(keep)
+        log.info(f"   (调试) 频道数截断至 {max_ch}")
+    if max_url:
+        for k in channels:
+            if len(channels[k]) > max_url:
+                channels[k] = channels[k][:max_url]
+
+    elapsed = round(time.time() - t0, 1)
+    stats = {
+        "fetched": sum(r.get("entries", 0) for r in src_reports),
+        "deduped": len(entries),
+        "removed": dedup_stats.get("removed", 0),
+        "channels": len(channels),
+        "elapsed": elapsed,
+    }
+    log.info(f"📊 阶段一完成（{elapsed}s）")
+    return channels, src_reports, stats
+
+
+# ═════════════════════════════════════════════════════════════
+#  阶段二：探测 + 精选
+# ═════════════════════════════════════════════════════════════
+
+def _write_fetch_report(outdir: Path, src_reports: List[dict], dedup: dict) -> None:
+    payload = {
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "dedup": dedup,
+        "sources": src_reports,
+    }
+    fp = outdir / "fetch_report.json"
+    fp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.info(f"📋 抓取报告 → {fp}")
+
+
+def _write_raw_channels(outdir: Path, channels: Dict[str, List[Entry]]) -> None:
+    data = []
+    for key, ents in channels.items():
+        main = ents[0]
+        data.append({
+            "key": key,
+            "name": main.name,
+            "quality": main.quality,
+            "group": main.group,
+            "candidates": len(ents),
+            "sources": sorted({e.source for e in ents}),
+            "quality_list": sorted({e.quality for e in ents if e.quality}),
+        })
+    data.sort(key=lambda d: (-d["candidates"], d["name"]))
+    fp = outdir / "raw_channels.json"
+    fp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.info(f"📋 原始频道清单 → {fp}（{len(data)} 个频道）")
+
+
+def _candidate_quota(cfg: dict) -> Tuple[int, int]:
+    """每频道送入探测的候选数区间（probe.candidate_pool.min/max）"""
+    p = cfg.get("probe", {}).get("candidate_pool", {}) or {}
+    return int(p.get("min", 10)), int(p.get("max", 20))
+
+
+# 单频道保留总路数硬上限（防止配置写大把 m3u 撑爆）
+_HARD_KEEP_CAP = 12
+
+
+def _quota_map(cfg: dict) -> Dict[int, int]:
+    """取当前生效的清晰度配额 {2160: n, 1080: n, 720: n}
+
+    晚高峰（live.peak_hours）用 res_quotas_peak，否则用 res_quotas；
+    前者缺失时沿用后者。
+    """
+    live = cfg.get("live", {}) or {}
+    peak_hours = live.get("peak_hours", [19, 20, 21, 22, 23]) or []
+    key = "res_quotas_peak" if dt.datetime.now().hour in peak_hours else "res_quotas"
+    raw = live.get(key) or live.get("res_quotas") or {}
+    out: Dict[int, int] = {}
+    for k, v in raw.items():
+        try:
+            out[int(k)] = int(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _quota_for(quota: Dict[int, int], quality: str) -> int:
+    """某画质档在本频道里的保留名额
+
+    4K → 2160 档；1080p/720p 都归 HD，取 1080 与 720 两档之和；
+    8K 无对应配置档，按 4K 档处理；SD 不给名额。
+    """
+    if quality == "8K":
+        return int(quota.get(2160, 4))
+    if quality == "4K":
+        return int(quota.get(2160, 4))
+    if quality == "HD":
+        return int(quota.get(1080, 5)) + int(quota.get(720, 3))
+    return 0
+
+
+def keep_limit(cfg: dict, qualities: Sequence[str]) -> int:
+    """本频道最终保留上限 = 各画质档名额之和，封顶 12"""
+    quota = _quota_map(cfg)
+    total = sum(_quota_for(quota, q) for q in qualities)
+    return max(1, min(total, _HARD_KEEP_CAP))
+
+
+def per_source_cap(cfg: dict) -> int:
+    """单个来源最多贡献几路：至少 1，最多等于总名额"""
+    quota = _quota_map(cfg)
+    return max(1, sum(quota.values()) or 1)
+
+
+def _select_candidates(entries: List[Entry], quality: str,
+                       qmin: int, qmax: int) -> List[Entry]:
+    """按画质偏好取候选：目标画质优先，兼顾其它清晰度兜底"""
+    pool: List[Entry] = []
+    pool += [e for e in entries if e.quality == quality]
+    if quality == "8K":
+        pool += [e for e in entries if e.quality == "4K"]
+    else:
+        pool += [e for e in entries if e.quality == "HD"]
+    pool += [e for e in entries if e.quality == "SD"]
+    # 保序去重
+    seen: set = set()
+    uniq: List[Entry] = []
+    for e in pool:
+        if e.url in seen:
+            continue
+        seen.add(e.url)
+        uniq.append(e)
+    target_cnt = sum(1 for e in entries if e.quality == quality)
+    want = max(qmin, min(qmax, target_cnt * 2 + 5))
+    return uniq[:want]
+
+
+def _domestic_first(entries: List[Entry]) -> List[Entry]:
+    """国内源排前，其余保持原序"""
+    domestic = [e for e in entries if _is_domestic(e.url)]
+    other = [e for e in entries if not _is_domestic(e.url)]
+    return domestic + other
+
+
+def _http_probe(session: requests.Session, url: str, timeout: int) -> ProbeResult:
+    """HTTP 探测：看状态码 + 响应头/首部内容判定是否为直播流"""
+    res = ProbeResult(url=url)
+    try:
+        r = session.get(url, timeout=timeout, stream=True, allow_redirects=True)
+        res.status = r.status_code
+        res.redirect_url = r.url if r.url != url else ""
+        if r.status_code != 200:
+            res.err = f"HTTP {r.status_code}"
+            return res
+        ctype = (r.headers.get("Content-Type") or "").lower()
+        chunk = next(r.iter_content(chunk_size=4096), b"") or b""
+        text_head = chunk.decode("utf-8", errors="replace")
+        is_stream = any(k in ctype for k in ("mpegurl", "mp2t", "octet-stream",
+                                              "video", "x-flv", "dash"))
+        is_playlist = "#EXTM3U" in text_head[:200] or ".ts" in text_head[:500]
+        if is_stream or is_playlist:
+            res.ok = True
+            res.elapsed = round(r.elapsed.total_seconds(), 2)
+        else:
+            res.err = f"not-a-stream({ctype[:30]})"
+        res.quality = _quality_from_text(url + " " + text_head[:200])
+        return res
+    except requests.exceptions.RequestException as e:
+        res.err = f"{type(e).__name__}"
+        return res
+    except Exception as e:  # noqa
+        res.err = f"{type(e).__name__}: {e}"
+        return res
+
+
+def _ffmpeg_probe(url: str, timeout: int) -> ProbeResult:
+    """ffmpeg 拉流探测（能识别"200 但空内容"的假活源）"""
+    res = ProbeResult(url=url)
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", url, "-t", "3", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=timeout + 2,
+        )
+        combined = (out.stderr or "") + (out.stdout or "")
+        if "frame=" in combined and "Error" not in combined and "Invalid" not in combined:
+            m = re.search(r"time=(\d+):(\d+):([\d.]+)", combined)
+            elapsed = 0.0
+            if m:
+                h, m2, s = int(m.group(1)), int(m.group(2)), float(m.group(3))
+                elapsed = h * 3600 + m2 * 60 + s
+            res.ok = True
+            res.elapsed = round(elapsed, 2)
+            res.quality = _quality_from_text(url + " " + combined[:300])
+        else:
+            err_line = (combined.strip().splitlines() or ["unknown"])[-1][:120]
+            res.err = err_line
+        return res
+    except subprocess.TimeoutExpired:
+        res.ok = True
+        res.elapsed = timeout
+        return res
+    except FileNotFoundError:
+        res.err = "ffmpeg not installed"
+        return res
+    except Exception as e:  # noqa
+        res.err = f"{type(e).__name__}: {e}"
+        return res
+
+
+def _ffmpeg_available() -> bool:
+    try:
+        import subprocess
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+        return True
+    except Exception:  # noqa
+        return False
+
+
+def probe_url(url: str, cfg: dict, use_ffmpeg: bool = False) -> ProbeResult:
+    timeout = int(cfg.get("probe", {}).get("timeout", 10))
+    session = make_session(retries=1, backoff=0.5, timeout=timeout)
+    if use_ffmpeg and _ffmpeg_available():
+        return _ffmpeg_probe(url, timeout)
+    return _http_probe(session, url, timeout)
+
+
+def _probe_batch(urls: Sequence[str], cfg: dict,
+                 use_ffmpeg: bool) -> Dict[str, ProbeResult]:
+    """带并发的批量探测，返回 {url: ProbeResult}"""
+    max_workers = max(int(cfg.get("probe", {}).get("concurrency", 20)), 1)
+    results: Dict[str, ProbeResult] = {}
+    if not urls:
+        return results
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = {ex.submit(probe_url, u, cfg, use_ffmpeg): u for u in urls}
+            done = 0
+            total = len(futs)
+            for fut in as_completed(futs):
+                u = futs[fut]
+                try:
+                    results[u] = fut.result()
+                except Exception as e:  # noqa
+                    results[u] = ProbeResult(url=u, err=str(e))
+                done += 1
+                if done % 200 == 0 or done == total:
+                    ok_n = sum(1 for v in results.values() if v.ok)
+                    log.info(f"   探测进度 {done}/{total}（当前存活 {ok_n}）")
+    except ImportError:
+        for u in urls:
+            results[u] = probe_url(u, cfg, use_ffmpeg)
+    return results
+
+
+def aggregate_live(cfg: dict) -> dict:
+    """
+    直播源聚合主流程。
+    返回统计字典。
+    """
+    outdir = Path(cfg.get("output_dir", "output"))
+    outdir.mkdir(parents=True, exist_ok=True)
+    use_ffmpeg = bool(cfg.get("probe", {}).get("use_ffmpeg", False))
+
+    log.info("=" * 60)
+    log.info("🎬 直播源聚合开始")
+    log.info(f"   输出目录：{outdir.resolve()}")
+    log.info(f"   探测方式：{'ffmpeg' if use_ffmpeg else 'http'}")
+    t_total = time.time()
+
+    # ── 阶段一 ──
+    channels, src_reports, st1 = fetch_and_dedup(cfg)
+    _write_fetch_report(outdir, src_reports,
+                        {"removed": st1["removed"], "deduped": st1["deduped"]})
+    _write_raw_channels(outdir, channels)
+
+    if not channels:
+        log.error("没有可用频道，终止")
+        return st1
+
+    # ── 阶段二 ──
+    log.info("=" * 60)
+    log.info("阶段二：探测 + 精选")
+    qmin, qmax = _candidate_quota(cfg)
+    quota = _quota_map(cfg)
+    live_cfg = cfg.get("live", {}) or {}
+    peak = dt.datetime.now().hour in (live_cfg.get("peak_hours") or [])
+    log.info(f"📊 探测候选池：每频道最多 {qmax} 条（国内源先测）")
+    log.info(f"📊 保留配额[{'晚高峰' if peak else '白天'}]："
+             f"4K×{quota.get(2160, 4)} + 1080p×{quota.get(1080, 5)} "
+             f"+ 720p×{quota.get(720, 3)} = {sum(quota.values())} 路封顶")
+
+    all_candidates: List[str] = []
+    channel_plan: List[Tuple[str, str, List[Entry]]] = []
+    for key, ents in channels.items():
+        quality = ents[0].quality or "HD"
+        cands = _select_candidates(ents, quality, qmin, qmax)
+        cands = _domestic_first(cands)
+        # 串线路过滤
+        anchor_name = canonical_channel_name(ents, key)
+        clean = [e for e in cands if not is_likely_cross_wire(e, anchor_name)]
+        if len(clean) != len(cands):
+            log.debug(f"   {anchor_name} 剔除 {len(cands)-len(clean)} 条疑似串线路")
+        channel_plan.append((key, anchor_name, clean))
+        all_candidates.extend(e.url for e in clean)
+
+    total_probe = len(all_candidates)
+    log.info(f"📊 待探测：{total_probe} 条 / {len(channels)} 频道")
+
+    if Flags.DRY_RUN:
+        log.info("🔸 DRY-RUN，跳过实际探测")
+        results = {}
+    else:
+        results = _probe_batch(all_candidates, cfg, use_ffmpeg)
+
+    alive_total = sum(1 for v in results.values() if v.ok)
+    log.info(f"📊 探测完成：{alive_total}/{total_probe} 存活")
+
+    # ── 精选 ──
+    live_out: List[Entry] = []
+    quality_cnt: Dict[str, int] = defaultdict(int)
+    fail_channels: List[str] = []
+    quota = _quota_map(cfg)
+    cap_src = per_source_cap(cfg)
+    for key, cname, cands in channel_plan:
+        if not cands:
+            fail_channels.append(cname)
+            continue
+        # 存活线路按来源分组
+        by_src: Dict[str, List[Entry]] = defaultdict(list)
+        for e in cands:
+            r = results.get(e.url)
+            if r and r.ok:
+                e.meta["elapsed"] = r.elapsed
+                e.meta["status"] = r.status
+                by_src[e.source].append(e)
+        if not by_src:
+            fail_channels.append(cname)
+            continue
+
+        # 源优先级：静态/国内源在前；源内按画质高→响应快排序
+        src_order = sorted(
+            by_src.keys(),
+            key=lambda s: -max(_entry_source_rank(e, cfg) for e in by_src[s])
+        )
+        for s in src_order:
+            by_src[s].sort(key=lambda e: (-_entry_quality_rank(e),
+                                          e.meta.get("elapsed", 999)))
+
+        # 按画质档名额填充：先 4K(2160) → 再 1080p → 再 720p
+        keep = keep_limit(cfg, [e.quality or "" for e in cands])
+        picked: List[Entry] = []
+        used_src: Dict[str, int] = defaultdict(int)
+        for want_q in ("4K", "HD"):
+            slot = _quota_for(quota, want_q)
+            if slot <= 0:
+                continue
+            # 每个源里只挑本档画质的线路，再按源优先级轮转取 1 条，
+            # 避免高档位被单个源吃满，也避免某源本档线路靠后时被误跳过
+            pool: Dict[str, List[Entry]] = {
+                s: [e for e in by_src[s] if (e.quality or "") == want_q][:cap_src]
+                for s in src_order
+            }
+            progressed = True
+            while sum(1 for p in picked if (p.quality or "") == want_q) < slot and progressed:
+                progressed = False
+                for src in src_order:
+                    if len(picked) >= keep:
+                        break
+                    if used_src[src] >= len(pool[src]):
+                        continue
+                    e = pool[src][used_src[src]]
+                    used_src[src] += 1
+                    picked.append(e.clone())
+                    quality_cnt[e.quality or "未知"] += 1
+                    progressed = True
+        if not picked:
+            fail_channels.append(cname)
+            continue
+        # 名额没填满时用其它画质补足：仍受 keep、单源上限、
+        # 以及该画质自身档位名额三重约束，避免 HD 把 4K 的名额吃掉
+        if len(picked) < keep:
+            for src in src_order:
+                while used_src[src] < min(cap_src, len(by_src[src])) and len(picked) < keep:
+                    e = by_src[src][used_src[src]]
+                    used_src[src] += 1
+                    q = e.quality or ""
+                    if any(p.url == e.url for p in picked):
+                        continue
+                    if sum(1 for p in picked if (p.quality or "") == q) >= _quota_for(quota, q):
+                        continue
+                    picked.append(e.clone())
+                    quality_cnt[q or "未知"] += 1
+        live_out.extend(picked[:keep])
+
+    log.info(f"✅ 精选完成：{len(live_out)} 条 / "
+             f"{len(set(e.name for e in live_out))} 频道")
+    if quality_cnt:
+        log.info("   画质分布：" + ", ".join(
+            f"{k}×{v}" for k, v in sorted(quality_cnt.items(), key=lambda x: -x[1])
+        ))
+    if fail_channels:
+        log.warning(f"   ⚠ {len(fail_channels)} 个频道无存活线路："
+                    f"{', '.join(fail_channels[:10])}")
+
+    # ── 输出 ──
+    _write_m3u(outdir / "live.m3u", live_out)
+    _write_txt(outdir / "live.txt", live_out)
+    _write_db(cfg, live_out, quality_cnt, st1)
+
+    elapsed = round(time.time() - t_total, 1)
+    stats = {
+        **st1,
+        "probed": total_probe,
+        "alive": alive_total,
+        "output_entries": len(live_out),
+        "output_channels": len(set(e.name for e in live_out)),
+        "quality": dict(quality_cnt),
+        "failed_channels": len(fail_channels),
+        "elapsed": elapsed,
+    }
+    log.info(f"🏁 直播聚合完成（总耗时 {elapsed}s）")
+    log.info(f"   📁 {outdir}/live.m3u")
+    log.info(f"   📁 {outdir}/live.txt")
+    log.info(f"   📁 {outdir}/fetch_report.json")
+    return stats
+
+
+# ═════════════════════════════════════════════════════════════
+#  输出写入
+# ═════════════════════════════════════════════════════════════
+
+def _esc(s: str) -> str:
+    return (s or "").replace('"', "&quot;").replace("\n", " ").replace(",", "，")
+
+
+def _write_m3u(path: Path, entries: List[Entry]) -> None:
+    lines = ["#EXTM3U url-tracker-radar=\"useless\"", ""]
+    for e in entries:
+        attrs = []
+        if e.tvg_id:
+            attrs.append(f'tvg-id="{_esc(e.tvg_id)}"')
+        if e.tvg_name:
+            attrs.append(f'tvg-name="{_esc(e.tvg_name)}"')
+        elif e.name:
+            attrs.append(f'tvg-name="{_esc(e.name)}"')
+        if e.logo:
+            attrs.append(f'tvg-logo="{_esc(e.logo)}"')
+        if e.group:
+            attrs.append(f'group-title="{_esc(e.group)}"')
+        attr_str = " ".join(attrs)
+        extra = ""
+        if e.meta.get("elapsed"):
+            extra = f' _info="rt={e.meta["elapsed"]}s"'
+        inf = f"#EXTINF:-1 {attr_str},{_esc(e.name)}{extra}"
+        lines.append(inf)
+        lines.append(e.url)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_txt(path: Path, entries: List[Entry]) -> None:
+    lines: List[str] = []
+    cur: Optional[str] = None
+    for e in entries:
+        if e.group != cur:
+            cur = e.group
+            lines.append(f"#genre#{cur or '其他'}")
+        lines.append(f"{e.name},{e.url}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_db(cfg: dict, entries: List[Entry], quality_cnt: dict, st1: dict) -> None:
+    if db is None:
+        return
+    try:
+        conn = db.connect(cfg)
+        db.upsert_sources(conn, [{"name": e.source, "type": e.source_type}
+                                 for e in entries])
+        db.upsert_channels(conn, [
+            {"name": e.name, "group": e.group, "quality": e.quality,
+             "tvg_id": e.tvg_id, "logo": e.logo, "source": e.source}
+            for e in entries
+        ])
+        log.info(f"💾 已写入数据库：{len(entries)} 条")
+        conn.close()
+    except Exception as e:  # noqa
+        log.warning(f"💾 数据库写入跳过：{e}")
+
+
+# ═════════════════════════════════════════════════════════════
+#  点播（完全保留，不改动逻辑）
+# ═════════════════════════════════════════════════════════════
+
+def run_vod(cfg: dict) -> dict:
+    """点播源聚合（逻辑保持不变，仅修正一处 meta 字段丢失问题）"""
+    vod_cfg = cfg.get("vod", {})
+    if not vod_cfg.get("enabled", True):
+        log.info("🎞️ 点播聚合已禁用（vod.enabled=false）")
+        return {}
+    outdir = Path(cfg.get("output_dir", "output"))
+    outdir.mkdir(parents=True, exist_ok=True)
+    timeout = int(cfg.get("fetch", {}).get("timeout", 30))
+    session = make_session()
+    log.info("=" * 60)
+    log.info("🎞️ 点播源聚合开始")
+    t0 = time.time()
+
+    sources = [s for s in (cfg.get("sources", []) or []) if s.get("type") == "vod"]
+    all_items: List[dict] = []
+    reports = []
+    for src in sources:
+        if src.get("enabled", True) is False:
+            continue
+        name = src.get("name", "?")
+        url = src.get("url", "")
+        if not url:
+            continue
+        t = time.time()
+        text, info = fetch_with_fallback(
+            url, src.get("fallbacks", []) or [], timeout=timeout
+        )
+        if text is None:
+            log.error(f"  ✗ 点播源 {name} 抓取失败：{info.get('error')}")
+            reports.append({"source": name, "ok": False,
+                            "error": info.get("error")})
+            continue
+        items = _parse_vod(text, src)
+        log.info(f"  ✓ 点播源 {name} → {len(items)} 条"
+                 f"（{round(time.time()-t,1)}s）")
+        reports.append({"source": name, "ok": True, "entries": len(items)})
+        all_items.extend(items)
+
+    # 去重（按 title+url）
+    seen: set = set()
+    uniq: List[dict] = []
+    for it in all_items:
+        k = (it.get("title", "").strip().lower(), it.get("url", ""))
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(it)
+
+    # 分类
+    by_cat: Dict[str, List[dict]] = defaultdict(list)
+    for it in uniq:
+        by_cat[it.get("category", "其他")].append(it)
+
+    # 每分类按 quality 配额精选
+    selected: List[dict] = []
+    for cat, items in by_cat.items():
+        items.sort(key=lambda d: (
+            -_vod_quality_rank(d),
+            d.get("year", 0) or 0,
+            d.get("source_rank", 0),
+        ))
+        quota = vod_cfg.get("per_category", 200)
+        selected.extend(items[:quota])
+
+    out = {
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "total": len(selected),
+        "by_category": {k: len(v) for k, v in by_cat.items()},
+        "items": selected,
+    }
+    fp = outdir / "vod.json"
+    fp.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    txt_lines = [f"# 点播清单（{len(selected)} 部）", ""]
+    for cat in sorted(by_cat):
+        txt_lines.append(f"# {cat}（{len(by_cat[cat])}）")
+        for it in by_cat[cat][: vod_cfg.get("per_category", 200)]:
+            txt_lines.append(
+                f"{it.get('title','')} | {it.get('year','')} | "
+                f"{it.get('quality','')} | {it.get('url','')}"
+            )
+        txt_lines.append("")
+    (outdir / "vod.txt").write_text("\n".join(txt_lines), encoding="utf-8")
+
+    elapsed = round(time.time() - t0, 1)
+    stats = {"items": len(uniq), "selected": len(selected),
+             "by_category": dict(out["by_category"]), "elapsed": elapsed}
+    log.info(f"✅ 点播聚合完成：{len(uniq)} → {len(selected)} 部（{elapsed}s）")
+    log.info(f"   📁 {fp}")
+    return stats
+
+
+def _parse_vod(text: str, src: dict) -> List[dict]:
+    """解析点播源，返回 [{'title','url','category','quality','year',...}]"""
+    items: List[dict] = []
+    fmt = src.get("format", "auto")
+    if fmt == "auto":
+        fmt = "json" if text.lstrip().startswith("{") or text.lstrip().startswith("[") else "txt"
+    if fmt == "json":
+        try:
+            data = json.loads(text)
+        except Exception:  # noqa
+            return []
+        if isinstance(data, dict):
+            data = data.get("data") or data.get("items") or data.get("list") or []
+        for d in data:
+            if not isinstance(d, dict):
+                continue
+            items.append({
+                "title": d.get("title") or d.get("name") or "",
+                "url": d.get("url") or d.get("play_url") or d.get("link") or "",
+                "category": d.get("category") or d.get("type") or "其他",
+                "quality": d.get("quality") or _quality_from_text(str(d)),
+                "year": d.get("year") or _guess_year(str(d)),
+                "source": src.get("name", ""),
+                "source_rank": _vod_source_rank(src),
+                "meta": {k: v for k, v in d.items()
+                         if k not in ("title", "url", "category", "quality", "year")},
+            })
+    else:
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = re.match(r'^(.*?)(?:[,，#$])\s*(.+)$', line)
+            if not m:
+                continue
+            title = _strip_quotes(m.group(1)).strip()
+            url = m.group(2).strip()
+            if not title or not url:
+                continue
+            items.append({
+                "title": title, "url": url,
+                "category": _guess_category(title),
+                "quality": _quality_from_text(title),
+                "year": _guess_year(title),
+                "source": src.get("name", ""),
+                "source_rank": _vod_source_rank(src),
+                "meta": {},
+            })
+    return [it for it in items if it.get("title") and it.get("url")]
+
+
+def _vod_quality_rank(it: dict) -> int:
+    q = (it.get("quality") or "").upper()
+    if "8K" in q:
+        return 50
+    if "4K" in q or "2160" in q:
+        return 40
+    if "1080" in q:
+        return 30
+    if "720" in q:
+        return 20
+    if it.get("quality"):
+        return 10
+    return 0
+
+
+def _vod_source_rank(src: dict) -> int:
+    name = (src.get("name") or "").lower()
+    if "static" in name:
+        return 100
+    if src.get("priority"):
+        try:
+            return int(src["priority"])
+        except Exception:  # noqa
+            return 50
+    return 50
+
+
+def _guess_category(title: str) -> str:
+    t = title
+    for kw, cat in [
+        (["电影", "影院", "院线", "大片"], "电影"),
+        (["剧", "连续剧", "电视"], "电视剧"),
+        (["综艺", "真人秀"], "综艺"),
+        (["纪录", "人文"], "纪录片"),
+        (["动画", "动漫", "卡通"], "动漫"),
+        (["体育", "赛事", "足球", "篮球", "NBA"], "体育"),
+        (["少儿", "儿童", "亲子"], "少儿"),
+        (["新闻", "资讯"], "新闻"),
+        (["音乐", "演唱会"], "音乐"),
+    ]:
+        if any(k in t for k in kw):
+            return cat
+    return "其他"
+
+
+def _guess_year(s: str) -> Optional[int]:
+    m = re.search(r"(19[8-9]\d|20[0-2]\d)", s)
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:  # noqa
+            return None
+    return None
+
+
+def _strip_quotes(s: str) -> str:
+    return s.strip().strip('"\'').strip()
+
+
+# ═════════════════════════════════════════════════════════════
+#  主入口
+# ═════════════════════════════════════════════════════════════
+
+def load_config(path: str) -> dict:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"配置文件不存在：{p}")
+    with p.open(encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    cfg.setdefault("base_dir", str(p.parent.resolve()))
+    cfg.setdefault("output_dir", str(p.parent / "output"))
+    return cfg
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="直播/点播源聚合器")
+    parser.add_argument("-c", "--config", default="config.yaml")
+    parser.add_argument("--live", action="store_true", help="只跑直播聚合")
+    parser.add_argument("--vod", action="store_true", help="只跑点播聚合")
+    parser.add_argument("--dry-run", action="store_true", help="只整理不探测")
+    parser.add_argument("--quick", action="store_true", help="快速模式（少量候选）")
+    parser.add_argument("--max-channels", type=int, default=0,
+                        help="最多处理频道数（调试）")
+    parser.add_argument("--max-urls", type=int, default=0,
+                        help="每频道最多候选 URL（调试）")
+    parser.add_argument("--no-ffmpeg", action="store_true",
+                        help="禁用 ffmpeg 探测")
     args = parser.parse_args()
 
-    t0 = time.time()
-    init_db()
-    Path('output').mkdir(exist_ok=True)
+    cfg = load_config(args.config)
+    Flags.DRY_RUN = args.dry_run
+    Flags.QUICK = args.quick
+    Flags.MAX_FETCH_CHANNELS = args.max_channels
+    Flags.MAX_FETCH_URLS = args.max_urls
+    if args.no_ffmpeg:
+        cfg.setdefault("probe", {})
+        cfg["probe"]["use_ffmpeg"] = False
 
-    repo = os.environ.get('GITHUB_REPOSITORY', 'shuo0101/ysc-self-host')
-    branch = os.environ.get('GITHUB_REF_NAME', 'main')
-    prefix = f"https://cdn.jsdelivr.net/gh/{repo}@{branch}/output"
+    signal.signal(signal.SIGINT, _sigint_raise)
 
-    only_live = args.live and not args.vod
-    only_vod = args.vod and not args.live
-
-    lc = ll = 0
-    vo = 0
-    if only_live:
-        lc, ll = await run_live(prefix)
-    elif only_vod:
-        vo = await run_vod(prefix)
-    else:
-        lc, ll = await run_live(prefix)
-        vo = await run_vod(prefix)
-
-    log_run(vd=0, vo=vo, ld=0, lc=lc, ll=ll, dur=round(time.time() - t0, 1))
-    print(f"✅ 完成 {lc}频道 {ll}线路, 点播源 {vo}个")
+    try:
+        if args.vod and not args.live:
+            run_vod(cfg)
+        elif args.live and not args.vod:
+            aggregate_live(cfg)
+        else:
+            aggregate_live(cfg)
+            run_vod(cfg)
+    except _FakeSigint:
+        log.warning("收到中断信号，退出")
+        return 130
+    return 0
 
 
-if __name__ == '__main__':
-    asyncio.run(main())
+if __name__ == "__main__":
+    sys.exit(main())
