@@ -1,8 +1,362 @@
 {
-  "generated_at": "2026-11-23T15:53:57.646102+00:00",
+  "generated_at": "2026-11-24T04:15:24.553798+00:00",
   "dedup": {
-    "removed": 0,
-    "deduped": 0
+    "removed": 328,
+    "deduped": 10329
   },
-  "sources": []
+  "sources": [
+    {
+      "source": "static-list#1",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 299,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.8,
+      "stale": false
+    },
+    {
+      "source": "static-list#2",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 299,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.8,
+      "stale": false
+    },
+    {
+      "source": "static-list#3",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 299,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.8,
+      "stale": false
+    },
+    {
+      "source": "static-list#4",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 296,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.8,
+      "stale": false
+    },
+    {
+      "source": "static-list#5",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 299,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.8,
+      "stale": false
+    },
+    {
+      "source": "static-list#6",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 299,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.8,
+      "stale": false
+    },
+    {
+      "source": "static-list#7",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 299,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.8,
+      "stale": false
+    },
+    {
+      "source": "static-list#8",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 299,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.8,
+      "stale": false
+    },
+    {
+      "source": "static-list#9",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 299,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.8,
+      "stale": false
+    },
+    {
+      "source": "static-list#10",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/btv1.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x71e7979310>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#11",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/gdhd.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x71eb909fd0>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#12",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/qhtv.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x71e79a1d00>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#13",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/jxtv.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x71e79a2690>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#14",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/tjtv.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x71e79a3020>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#15",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 348,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.9,
+      "stale": false
+    },
+    {
+      "source": "static-list#16",
+      "type": "network",
+      "ok": false,
+      "error": "HTTP 403",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#17",
+      "type": "network",
+      "ok": false,
+      "error": "SSLError: HTTPSConnectionPool(host='test1.live.sdetv.com.cn', port=443): Max retries exceeded with url: /live/dianshizhibo/playlist.m3u8 (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired (_ssl.c:1085)')))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#18",
+      "type": "network",
+      "ok": true,
+      "entries": 6,
+      "bytes": 851,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.9,
+      "stale": false
+    },
+    {
+      "source": "static-list#19",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectionError: HTTPConnectionPool(host='live4.tdm.com.mo', port=80): Max retries exceeded with url: /ch1/_definst_/ch1.live/playlist.m3u8 (Caused by NewConnectionError(\"HTTPConnection(host='live4.tdm.com.mo', port=80): Failed to establish a new connection: [Errno 101] Network is unreachable\"))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#20",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectTimeout: HTTPConnectionPool(host='zhibo.hkstv.tv', port=80): Max retries exceeded with url: /livestream/mutfysrq/playlist.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='zhibo.hkstv.tv', port=80) at 0x71e79a1bf0>, 'Connection to zhibo.hkstv.tv timed out. (connect timeout=20)'))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#21",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectionError: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv4.m3u (Caused by NewConnectionError(\"HTTPSConnection(host='live.fanmingming.com', port=443): Failed to establish a new connection: [Errno 101] Network is unreachable\"))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#22",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectionError: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/cctv.m3u (Caused by NewConnectionError(\"HTTPSConnection(host='live.fanmingming.com', port=443): Failed to establish a new connection: [Errno 101] Network is unreachable\"))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#23",
+      "type": "network",
+      "ok": true,
+      "entries": 1619,
+      "bytes": 396412,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.9,
+      "stale": false
+    },
+    {
+      "source": "static-list#24",
+      "type": "network",
+      "ok": false,
+      "error": "HTTP 404",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#25",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectionError: HTTPSConnectionPool(host='cdn.jsdelivr.net', port=443): Max retries exceeded with url: /gh/Lightconer/TVBox-Sources@main/output/live.txt (Caused by ProtocolError('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer')))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#26",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectionError: HTTPSConnectionPool(host='cdn.jsdelivr.net', port=443): Max retries exceeded with url: /gh/Lightconer/TVBox-Sources@main/output/live.m3u (Caused by ProtocolError('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer')))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#27",
+      "type": "network",
+      "ok": true,
+      "entries": 156,
+      "bytes": 32055,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.9,
+      "stale": false
+    },
+    {
+      "source": "static-list#28",
+      "type": "network",
+      "ok": true,
+      "entries": 18,
+      "bytes": 3736,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.9,
+      "stale": false
+    },
+    {
+      "source": "static-list#29",
+      "type": "network",
+      "ok": false,
+      "error": "HTTP 404",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#30",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectionError: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv6.m3u (Caused by NewConnectionError(\"HTTPSConnection(host='live.fanmingming.com', port=443): Failed to establish a new connection: [Errno 101] Network is unreachable\"))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-list#31",
+      "type": "network",
+      "ok": false,
+      "error": "ConnectionError: HTTPSConnectionPool(host='raw.githubusercontent.com', port=443): Max retries exceeded with url: /hwansong/ipv6tv/main/iptv6.m3u (Caused by ProtocolError('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer')))",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-4k#32",
+      "type": "network",
+      "ok": false,
+      "error": "HTTP 403",
+      "entries": 0,
+      "cached": false
+    },
+    {
+      "source": "static-4k#33",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 327,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.9,
+      "stale": false
+    },
+    {
+      "source": "static-4k#34",
+      "type": "network",
+      "ok": true,
+      "entries": 3,
+      "bytes": 327,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.9,
+      "stale": false
+    },
+    {
+      "source": "zsdc#35",
+      "type": "network",
+      "ok": true,
+      "entries": 155,
+      "bytes": 47983,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.9,
+      "stale": false
+    },
+    {
+      "source": "zsdc#36",
+      "type": "network",
+      "ok": true,
+      "entries": 155,
+      "bytes": 49270,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.9,
+      "stale": false
+    },
+    {
+      "source": "local/影视仓带台标EPG.m3u",
+      "type": "local",
+      "ok": true,
+      "entries": 8512,
+      "bytes": 2132786,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.9,
+      "stale": false
+    }
+  ]
 }
