@@ -1,8 +1,6 @@
 name: 每日直播源更新
 
 'on':
-  schedule:
-    - cron: '0 18 * * *'   # UTC 18:00 = 北京时间次日 02:00
   workflow_dispatch:
     inputs:
       force_refresh:
