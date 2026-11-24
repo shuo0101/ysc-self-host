@@ -43,19 +43,16 @@ live:
     - "https://ali-m-l.cztv.com/channels/lantian/channel010/1080p.m3u8"
     - "https://ali-m-l.cztv.com/channels/lantian/channel011/1080p.m3u8"
     - "https://ali-m-l.cztv.com/channels/lantian/channel012/1080p.m3u8"
-    # 北邮 IPTV（地方台）
-    - "http://ivi.bupt.edu.cn/hls/btv1.m3u8"
-    - "http://ivi.bupt.edu.cn/hls/gdhd.m3u8"
-    - "http://ivi.bupt.edu.cn/hls/qhtv.m3u8"
-    - "http://ivi.bupt.edu.cn/hls/jxtv.m3u8"
-    - "http://ivi.bupt.edu.cn/hls/tjtv.m3u8"
+    # zdbs
+    - "https://raw.githubusercontent.com/vbskycn/iptv/refs/heads/master/tv/iptv4.m3u"
+    - "https://raw.githubusercontent.com/vbskycn/iptv/refs/heads/master/tv/iptv4.txt"
     # 4K / 纯享
     - "https://event.pull.hebtv.com:443/live/live101.m3u8"
     - "https://livepull-tcms.sztv.com.cn/live/sz4Kpgm.m3u8"
+    - "https://raw.bgithub.xyz/Ftindy/IPTV-URL/main/IPTV.m3u"
     # 省级官方 HLS（1080p）
     - "https://test1.live.sdetv.com.cn/live/dianshizhibo/playlist.m3u8"
-    - "http://bp-resource-dfl.bestv.cn/155/3/video.m3u8"
-    # 港澳静态源
+    - "http://bp-resource-dfl.bestv.cn/155/3/video.m3u8"    # 港澳静态源
     - "http://live4.tdm.com.mo:80/ch1/_definst_/ch1.live/playlist.m3u8"
     - "http://zhibo.hkstv.tv/livestream/mutfysrq/playlist.m3u8"
     # 当前活跃的公开聚合站
@@ -138,7 +135,8 @@ live:
   db_path: "data/sources.db"
   timeout: 8               # HEAD 探测超时（秒）
   probe_timeout: 6         # ffprobe 探测超时（秒）
-  concurrency: 50          # 并发连接数
+  concurrency: 15          # 探测并发（平板实测 50 丢包多，降到 15）
+  source_concurrency: 8    # 阶段一同时抓几个源（原来串行，一个超时源卡 6 分钟）
   min_resolution: 720      # 最低分辨率，低于此值丢弃
   max_channels: 1000       # 最多保留的频道数量
   cache_dir: "sources_cache"    # 内容缓存 + probe_cache.json 都放这里
