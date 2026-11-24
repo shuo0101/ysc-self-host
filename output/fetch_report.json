@@ -1,114 +1,114 @@
 {
-  "generated_at": "2026-11-24T04:15:24.553798+00:00",
+  "generated_at": "2026-11-24T12:03:08.120834+00:00",
   "dedup": {
     "removed": 328,
-    "deduped": 10329
+    "deduped": 10284
   },
   "sources": [
     {
       "source": "static-list#1",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 299,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.8,
+      "cache_age_hours": 9.1,
       "stale": false
     },
     {
       "source": "static-list#2",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 299,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.8,
+      "cache_age_hours": 9.1,
       "stale": false
     },
     {
       "source": "static-list#3",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 299,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.8,
+      "cache_age_hours": 9.1,
       "stale": false
     },
     {
       "source": "static-list#4",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 296,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.8,
+      "cache_age_hours": 9.1,
       "stale": false
     },
     {
       "source": "static-list#5",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 299,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.8,
+      "cache_age_hours": 9.1,
       "stale": false
     },
     {
       "source": "static-list#6",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 299,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.8,
+      "cache_age_hours": 9.1,
       "stale": false
     },
     {
       "source": "static-list#7",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 299,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.8,
+      "cache_age_hours": 9.1,
       "stale": false
     },
     {
       "source": "static-list#8",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 299,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.8,
+      "cache_age_hours": 9.1,
       "stale": false
     },
     {
       "source": "static-list#9",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 299,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.8,
+      "cache_age_hours": 9.1,
       "stale": false
     },
     {
       "source": "static-list#10",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/btv1.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x71e7979310>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
+      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/btv1.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x7cee455040>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -116,7 +116,7 @@
       "source": "static-list#11",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/gdhd.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x71eb909fd0>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
+      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/gdhd.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x7cee454f30>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -124,7 +124,7 @@
       "source": "static-list#12",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/qhtv.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x71e79a1d00>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
+      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/qhtv.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x7cee454e20>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -132,7 +132,7 @@
       "source": "static-list#13",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/jxtv.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x71e79a2690>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
+      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/jxtv.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x7cee455260>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -140,7 +140,7 @@
       "source": "static-list#14",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/tjtv.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x71e79a3020>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
+      "error": "ConnectTimeout: HTTPConnectionPool(host='ivi.bupt.edu.cn', port=80): Max retries exceeded with url: /hls/tjtv.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='ivi.bupt.edu.cn', port=80) at 0x7cee455150>, 'Connection to ivi.bupt.edu.cn timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -148,11 +148,11 @@
       "source": "static-list#15",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 348,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.9,
+      "cache_age_hours": 8.7,
       "stale": false
     },
     {
@@ -175,11 +175,11 @@
       "source": "static-list#18",
       "type": "network",
       "ok": true,
-      "entries": 6,
+      "entries": 0,
       "bytes": 851,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.9,
+      "cache_age_hours": 8.7,
       "stale": false
     },
     {
@@ -194,7 +194,7 @@
       "source": "static-list#20",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPConnectionPool(host='zhibo.hkstv.tv', port=80): Max retries exceeded with url: /livestream/mutfysrq/playlist.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='zhibo.hkstv.tv', port=80) at 0x71e79a1bf0>, 'Connection to zhibo.hkstv.tv timed out. (connect timeout=20)'))",
+      "error": "ConnectionError: HTTPConnectionPool(host='zhibo.hkstv.tv', port=80): Max retries exceeded with url: /livestream/mutfysrq/playlist.m3u8 (Caused by NewConnectionError(\"HTTPConnection(host='zhibo.hkstv.tv', port=80): Failed to establish a new connection: [Errno 101] Network is unreachable\"))",
       "entries": 0,
       "cached": false
     },
@@ -222,7 +222,7 @@
       "bytes": 396412,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.9,
+      "cache_age_hours": 8.6,
       "stale": false
     },
     {
@@ -257,7 +257,7 @@
       "bytes": 32055,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.9,
+      "cache_age_hours": 8.6,
       "stale": false
     },
     {
@@ -268,7 +268,7 @@
       "bytes": 3736,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.9,
+      "cache_age_hours": 8.6,
       "stale": false
     },
     {
@@ -307,22 +307,22 @@
       "source": "static-4k#33",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 327,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.9,
+      "cache_age_hours": 8.6,
       "stale": false
     },
     {
       "source": "static-4k#34",
       "type": "network",
       "ok": true,
-      "entries": 3,
+      "entries": 0,
       "bytes": 327,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.9,
+      "cache_age_hours": 8.6,
       "stale": false
     },
     {
@@ -333,7 +333,7 @@
       "bytes": 47983,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.9,
+      "cache_age_hours": 8.6,
       "stale": false
     },
     {
@@ -344,18 +344,18 @@
       "bytes": 49270,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.9,
+      "cache_age_hours": 8.6,
       "stale": false
     },
     {
       "source": "local/影视仓带台标EPG.m3u",
       "type": "local",
       "ok": true,
-      "entries": 8512,
+      "entries": 8509,
       "bytes": 2132786,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.9,
+      "cache_age_hours": 8.6,
       "stale": false
     }
   ]
