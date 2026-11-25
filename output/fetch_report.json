@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-24T18:09:17.609120+00:00",
+  "generated_at": "2026-11-25T00:20:14.001709+00:00",
   "dedup": {
     "removed": 2121,
     "deduped": 10284
@@ -11,9 +11,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.29,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -22,9 +22,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.21,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -33,9 +33,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.29,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -44,9 +44,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 296,
-      "elapsed": 0.2,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -55,9 +55,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.26,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -66,9 +66,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.17,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -77,9 +77,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.2,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -88,9 +88,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.21,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -99,9 +99,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.16,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -126,9 +126,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 348,
-      "elapsed": 0.17,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -143,7 +143,7 @@
       "source": "static-list#14",
       "type": "network",
       "ok": false,
-      "error": "ConnectionError: HTTPSConnectionPool(host='raw.bgithub.xyz', port=443): Max retries exceeded with url: /Ftindy/IPTV-URL/main/IPTV.m3u (Caused by NewConnectionError(\"HTTPSConnection(host='raw.bgithub.xyz', port=443): Failed to establish a new connection: [Errno 101] Network is unreachable\"))",
+      "error": "ConnectTimeout: HTTPSConnectionPool(host='raw.bgithub.xyz', port=443): Max retries exceeded with url: /Ftindy/IPTV-URL/main/IPTV.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='raw.bgithub.xyz', port=443) at 0x79d9fa1f90>, 'Connection to raw.bgithub.xyz timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -155,7 +155,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 14.9,
+      "cache_age_hours": 21.0,
       "stale": true
     },
     {
@@ -164,16 +164,16 @@
       "ok": true,
       "entries": 0,
       "bytes": 851,
-      "elapsed": 0.12,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
       "source": "static-list#17",
       "type": "network",
       "ok": false,
-      "error": "ConnectionError: HTTPConnectionPool(host='live4.tdm.com.mo', port=80): Max retries exceeded with url: /ch1/_definst_/ch1.live/playlist.m3u8 (Caused by NewConnectionError(\"HTTPConnection(host='live4.tdm.com.mo', port=80): Failed to establish a new connection: [Errno 101] Network is unreachable\"))",
+      "error": "ConnectTimeout: HTTPConnectionPool(host='live4.tdm.com.mo', port=80): Max retries exceeded with url: /ch1/_definst_/ch1.live/playlist.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='live4.tdm.com.mo', port=80) at 0x79da2129f0>, 'Connection to live4.tdm.com.mo timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -185,14 +185,14 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 14.9,
+      "cache_age_hours": 21.0,
       "stale": true
     },
     {
       "source": "static-list#19",
       "type": "network",
       "ok": false,
-      "error": "ConnectionError: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv4.m3u (Caused by NewConnectionError(\"HTTPSConnection(host='live.fanmingming.com', port=443): Failed to establish a new connection: [Errno 101] Network is unreachable\"))",
+      "error": "ConnectTimeout: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv4.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='live.fanmingming.com', port=443) at 0x79d9fa2210>, 'Connection to live.fanmingming.com timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -200,7 +200,7 @@
       "source": "static-list#20",
       "type": "network",
       "ok": false,
-      "error": "ConnectionError: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/cctv.m3u (Caused by NewConnectionError(\"HTTPSConnection(host='live.fanmingming.com', port=443): Failed to establish a new connection: [Errno 101] Network is unreachable\"))",
+      "error": "ConnectTimeout: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/cctv.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='live.fanmingming.com', port=443) at 0x79d9fa2350>, 'Connection to live.fanmingming.com timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -210,9 +210,9 @@
       "ok": true,
       "entries": 1619,
       "bytes": 396412,
-      "elapsed": 0.76,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -231,7 +231,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 14.8,
+      "cache_age_hours": 21.0,
       "stale": true
     },
     {
@@ -248,9 +248,9 @@
       "ok": true,
       "entries": 156,
       "bytes": 32055,
-      "elapsed": 0.75,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -259,9 +259,9 @@
       "ok": true,
       "entries": 18,
       "bytes": 3736,
-      "elapsed": 0.72,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -272,7 +272,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 14.8,
+      "cache_age_hours": 21.0,
       "stale": true
     },
     {
@@ -283,7 +283,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 14.8,
+      "cache_age_hours": 21.0,
       "stale": true
     },
     {
@@ -308,9 +308,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 327,
-      "elapsed": 0.15,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -319,9 +319,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 327,
-      "elapsed": 0.19,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -330,9 +330,9 @@
       "ok": true,
       "entries": 155,
       "bytes": 47983,
-      "elapsed": 0.73,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -341,9 +341,9 @@
       "ok": true,
       "entries": 155,
       "bytes": 49270,
-      "elapsed": 0.7,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     },
     {
@@ -352,9 +352,9 @@
       "ok": true,
       "entries": 8509,
       "bytes": 2132786,
-      "elapsed": 0.03,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.2,
       "stale": false
     }
   ]
