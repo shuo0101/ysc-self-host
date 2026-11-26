@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-""" aggregator.py — 直播源 / 点播源 聚合器（v9.2） 两阶段流水线 阶段一 抓取 → 整理 → 全局去重（网络源 + 本地源） 阶段二 探测 → 精选 → 输出 本次修正 · 点播逻辑完全保留，不改动 · 频道归一化：4K 与 4、8K 与 8 视为【不同】频道，必须拆开 正确 CCTV4K ≠ CCTV4 、CCTV8K ≠ CCTV8 正确 卫视4K ≠ 卫视4 、卫视8K ≠ 卫视8 · 串线路修复：同一频道下，把名称/画质明显不属于该频道的候选剔除 · 补齐全部辅助函数（v9.1 中缺失定义的引用） """
+"""
+aggregator.py — 直播源 / 点播源 聚合器（v9.2）
+
+两阶段流水线
+  阶段一  抓取 → 整理 → 全局去重（网络源 + 本地源）
+  阶段二  探测 → 精选 → 输出
+
+本次修正
+  · 点播逻辑完全保留，不改动
+  · 频道归一化：4K 与 4、8K 与 8 视为【不同】频道，必须拆开
+      正确  CCTV4K ≠ CCTV4 、CCTV8K ≠ CCTV8
+      正确  卫视4K ≠ 卫视4 、卫视8K ≠ 卫视8
+  · 串线路修复：同一频道下，把名称/画质明显不属于该频道的候选剔除
+  · 补齐全部辅助函数（v9.1 中缺失定义的引用）
+"""
 
 from __future__ import annotations
 
@@ -61,8 +75,17 @@ class Flags:
 
 
 # ═════════════════════════════════════════════════════════════
-# 数据模型
+#  数据模型
 # ═════════════════════════════════════════════════════════════
+
+_JUNK_STATS: dict = {'dropped': 0, 'by_source': {}}
+
+def _junk_drop(src: dict) -> None:
+    """记一条被丢弃的垃圾名条目（按源归因）。"""
+    _JUNK_STATS['dropped'] += 1
+    by = _JUNK_STATS.setdefault('by_source', {})
+    _s = (src or {}).get('name', '?')
+    by[_s] = by.get(_s, 0) + 1
 
 @dataclass
 class Entry:
@@ -114,9 +137,9 @@ def _sigint_raise(signum, frame):
 
 
 # ═════════════════════════════════════════════════════════════
-# 缓存层
-# · 源内容缓存：sources_cache/<name>.txt + 同名 .json 元信息
-# · 探测结果缓存：probe_cache.json（URL → 结果 + 历史）
+#  缓存层
+#  · 源内容缓存：sources_cache/<name>.txt  + 同名 .json 元信息
+#  · 探测结果缓存：probe_cache.json（URL → 结果 + 历史）
 # ═════════════════════════════════════════════════════════════
 
 def _atomic_write(fp: Path, data: str) -> bool:
@@ -135,7 +158,10 @@ def _atomic_write(fp: Path, data: str) -> bool:
 
 
 def _cache_stale(cache_fp: Path, ttl: int) -> bool:
-    """ 缓存是否失效：TTL 内有效；TTL<=0 表示永不过期； 文件缺失或时间戳不可读一律视为失效。 """
+    """
+    缓存是否失效：TTL 内有效；TTL<=0 表示永不过期；
+    文件缺失或时间戳不可读一律视为失效。
+    """
     if ttl <= 0:
         return False
     try:
@@ -152,7 +178,10 @@ def cache_paths(cfg: dict, name: str) -> Tuple[Path, Path]:
 
 
 def read_cache(cfg: dict, name: str, ttl: int) -> Tuple[Optional[str], dict]:
-    """ 读源内容缓存。返回 (text, meta)；失效或不存在时 text=None。 meta 里带 cached_at / age_hours / stale 便于日志与报告。 """
+    """
+    读源内容缓存。返回 (text, meta)；失效或不存在时 text=None。
+    meta 里带 cached_at / age_hours / stale 便于日志与报告。
+    """
     fp, meta_fp = cache_paths(cfg, name)
     if _cache_stale(fp, ttl):
         return None, {"stale": True}
@@ -175,7 +204,10 @@ def read_cache(cfg: dict, name: str, ttl: int) -> Tuple[Optional[str], dict]:
 
 
 def write_cache(cfg: dict, name: str, text: str, info: dict) -> bool:
-    """ 写源内容缓存。只接受合法播放列表，避免把空响应 / HTML 错误页 固化下来（那会让一次临时故障变成长期污染）。 """
+    """
+    写源内容缓存。只接受合法播放列表，避免把空响应 / HTML 错误页
+    固化下来（那会让一次临时故障变成长期污染）。
+    """
     if not _looks_like_playlist(text):
         return False
     fp, meta_fp = cache_paths(cfg, name)
@@ -219,8 +251,14 @@ def save_probe_cache(cfg: dict, store: dict) -> None:
     _atomic_write(fp, json.dumps(store, ensure_ascii=False, separators=(",", ":")))
 
 
-def probe_cache_get(store: dict, url: str, ttl: int, window: int) -> Optional[ProbeResult]:
-    """ 命中条件（全部满足才复用）： 1. 有记录且未过 TTL 2. 历史命中率 >= 50%（window 次内）——抖动线路不固化 3. 上次结果为失败时，要求历史至少成功过 1 次，否则每次都重试 """
+def probe_cache_get(store: dict, url: str, ttl: int,
+                    window: int) -> Optional[ProbeResult]:
+    """
+    命中条件（全部满足才复用）：
+      1. 有记录且未过 TTL
+      2. 历史命中率 >= 50%（window 次内）——抖动线路不固化
+      3. 上次结果为失败时，要求历史至少成功过 1 次，否则每次都重试
+    """
     rec = store.get(url)
     if not isinstance(rec, dict):
         return None
@@ -298,10 +336,11 @@ def probe_cache_purge(store: dict, max_age: int) -> int:
 
 
 # ═════════════════════════════════════════════════════════════
-# HTTP / 会话
+#  HTTP / 会话
 # ═════════════════════════════════════════════════════════════
 
-def make_session(retries: int = 2, backoff: float = 1.0, timeout: int = 15) -> requests.Session:
+def make_session(retries: int = 2, backoff: float = 1.0,
+                 timeout: int = 15) -> requests.Session:
     """构造带重试的 requests 会话"""
     s = requests.Session()
     retry = Retry(
@@ -371,8 +410,12 @@ def fetch_text(url: str, timeout: int = 15) -> Tuple[Optional[str], dict]:
     return None, info
 
 
-def fetch_with_fallback(url: str, fallbacks: Sequence[str], timeout: int = 15) -> Tuple[Optional[str], dict]:
-    """ 带 fallback 的抓取：依次尝试主地址与备用地址。 返回 (text, info)；全失败则 text=None。 """
+def fetch_with_fallback(url: str, fallbacks: Sequence[str],
+                        timeout: int = 15) -> Tuple[Optional[str], dict]:
+    """
+    带 fallback 的抓取：依次尝试主地址与备用地址。
+    返回 (text, info)；全失败则 text=None。
+    """
     info: dict = {"url": url, "error": None, "tried": []}
     candidates = [url] + list(fallbacks or [])
     for u in candidates:
@@ -389,11 +432,24 @@ def fetch_with_fallback(url: str, fallbacks: Sequence[str], timeout: int = 15) -
 
 
 # ═════════════════════════════════════════════════════════════
-# 源发现（网络 + 本地）
+#  源发现（网络 + 本地）
 # ═════════════════════════════════════════════════════════════
 
 def build_sources(cfg: dict) -> List[dict]:
-    """ 把 config.yaml 里 live / vod / discover 各分组展开成统一的 sources 列表。 支持的写法（缺哪个都不会报错）： live.urls_static 网络清单 URL（m3u / txt） live.urls_static_4k 同上，标记为 4K 候选 live.urls_refresh 带签名/会过期的清单 URL live.urls_zsdc 运营商单播源清单 live.urls_custom 自定义补充清单 live.local_dir 本地目录，自动扫描 *.txt / *.m3u / *.m3u8 live.sources 已按旧格式写好的完整源定义（原样保留） discover.vod_seeds 点播种子 顶层 sources: 若已存在，则与上面展开的结果合并（按 url 去重）。 """
+    """
+    把 config.yaml 里 live / vod / discover 各分组展开成统一的 sources 列表。
+
+    支持的写法（缺哪个都不会报错）：
+      live.urls_static       网络清单 URL（m3u / txt）
+      live.urls_static_4k    同上，标记为 4K 候选
+      live.urls_refresh      带签名/会过期的清单 URL
+      live.urls_zsdc         运营商单播源清单
+      live.urls_custom       自定义补充清单
+      live.local_dir        本地目录，自动扫描 *.txt / *.m3u / *.m3u8
+      live.sources          已按旧格式写好的完整源定义（原样保留）
+      discover.vod_seeds    点播种子
+    顶层 sources: 若已存在，则与上面展开的结果合并（按 url 去重）。
+    """
     base = Path(cfg.get("base_dir", "."))
     live_cfg = cfg.get("live", {}) or {}
     out: List[dict] = []
@@ -473,15 +529,174 @@ def build_sources(cfg: dict) -> List[dict]:
 
     live_n = sum(1 for s in out if s.get("type") == "live")
     vod_n = sum(1 for s in out if s.get("type") == "vod")
-    log.info(f"🗂️ 源清单展开：直播 {live_n} 个 / 点播 {vod_n} 个（已去重）")
+    log.info(f"🗂️  源清单展开：直播 {live_n} 个 / 点播 {vod_n} 个（已去重）")
     return out
 
 
 _LAST_CACHE_STATS: dict = {}     # 最近一次 discover_live 的缓存统计（供报告使用）
 
 
+def _fetch_one_source(src: dict, cfg: dict, timeout: int,
+                      cache_on: bool, cache_ttl: int) -> Tuple[List["Entry"], dict]:
+    """抓取单个源：缓存 → 网络 → 过期缓存退化。返回 (entries, report)。
+
+    从 discover_live 原循环体抽出，供并发调用。不触碰任何共享计数器，
+    统计由调用方按 report 汇总，因此线程安全。
+    """
+    name = src.get("name", "?")
+    src_type = src.get("source_type", "network")
+    url = src.get("url", "")
+
+    # 本地静态源：直接载入，无 IO
+    if src_type == "static":
+        ents = _parse_static_source(src)
+        return ents, {
+            "source": name, "type": "static", "ok": True,
+            "entries": len(ents), "bytes": 0, "elapsed": 0.0,
+        }
+
+    if src_type == "local":
+        log.info(f"  📁 本地源 [{name}] {url}")
+    else:
+        log.info(f"  🌐 网络源 [{name}] {url}")
+
+    ephemeral = ("refresh" in (src.get("tags") or [])) or (src.get("ephemeral") is True)
+
+    text, info = None, {}
+    if cache_on and not ephemeral:
+        text, meta = read_cache(cfg, name, cache_ttl)
+        if text is not None:
+            info = {"url": url, "final_url": meta.get("url") or url,
+                    "bytes": meta.get("bytes", 0), "elapsed": 0.0,
+                    "status": meta.get("status", 200)}
+            for k in ("from_cache", "cache_age", "cache_age_hours"):
+                if k in meta:
+                    info[k] = meta[k]
+            log.info(f"      ↳ 命中缓存（{meta.get('cache_age_hours', '?')} 小时前）")
+
+    if text is None:
+        text, info = fetch_with_fallback(
+            url, src.get("fallbacks", []) or [], timeout=timeout
+        )
+        if text is None and cache_on and not ephemeral:
+            text, meta = read_cache(cfg, name, 0)
+            if text is not None:
+                for k in ("from_cache", "cache_age", "cache_age_hours"):
+                    if k in meta:
+                        info[k] = meta[k]
+                info["stale"] = True
+                log.warning(f"      ↳ 抓取失败，退化使用过期缓存"
+                            f"（{meta.get('cache_age_hours', '?')} 小时前）")
+
+    if text is None:
+        log.error(f"      ✗ 抓取失败：{info.get('error')}")
+        return [], {
+            "source": name, "type": src_type, "ok": False,
+            "error": info.get("error"), "entries": 0, "cached": False,
+        }
+
+    log.info(f"      ✓ {info.get('bytes', 0)} 字节 / {round(info.get('elapsed', 0), 1)}s"
+             f"{'  [缓存]' if info.get('from_cache') else ''}")
+    ents = _parse_live_text(text, src)
+
+    if cache_on and not ephemeral and not info.get("from_cache"):
+        if write_cache(cfg, name, text, {**info, "entries": len(ents)}):
+            info["_cache_written"] = True
+        elif not _looks_like_playlist(text):
+            info["_cache_rejected"] = True
+            log.warning("      ⚠ 内容不像播放列表，保留原缓存不覆盖")
+
+    return ents, {
+        "source": name, "type": src_type, "ok": True,
+        "entries": len(ents), "bytes": info.get("bytes", 0),
+        "elapsed": info.get("elapsed", 0.0),
+        "cached": bool(info.get("from_cache")),
+        "cache_age_hours": info.get("cache_age_hours", 0),
+        "stale": bool(info.get("stale")),
+        "_cache_written": bool(info.get("_cache_written")),
+        "_cache_rejected": bool(info.get("_cache_rejected")),
+    }
+
+
+def _run_sources(tasks: List[dict], cfg: dict, timeout: int,
+                 cache_on: bool, cache_ttl: int) -> Tuple[List["Entry"], List[dict]]:
+    """并发抓取源清单。
+
+    原先串行 for 循环里，一个不可达源要等满 timeout×重试 才轮到下一个；
+    日志实测 ivi.bupt.edu.cn 5 个地址各卡 6 分钟，阶段一空等 30+ 分钟。
+    这里改成线程池，总耗时≈最慢的那个源，而不是所有源之和。
+
+    并发度取 fetch.source_concurrency，默认 8：既抹平超时等待，
+    又不至于对源站形成冲击。顺序不保证，统计按 source 名回填。
+    """
+    fcfg = cfg.get("fetch", {}) or {}
+    workers = max(int(fcfg.get("source_concurrency", 8)), 1)
+    if workers == 1 or len(tasks) <= 1:
+        pairs = [_fetch_one_source(s, cfg, timeout, cache_on, cache_ttl) for s in tasks]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(workers, len(tasks))) as ex:
+            pairs = list(ex.map(
+                lambda s: _fetch_one_source(s, cfg, timeout, cache_on, cache_ttl),
+                tasks
+            ))
+    entries: List["Entry"] = []
+    reports: List[dict] = []
+    for ents, rep in pairs:
+        entries.extend(ents)
+        reports.append(rep)
+    return entries, reports
+
+
 def discover_live(cfg: dict) -> Tuple[List[Entry], List[dict]]:
-    """ 发现并抓取所有直播源（网络 + 本地 + static）。 返回 (entries, source_reports) """
+    """
+    发现并抓取所有直播源（网络 + 本地 + static）。
+    返回 (entries, source_reports)
+    """
+    sources = [s for s in build_sources(cfg) if s.get("type") == "live"]
+    if not sources:
+        log.error("❌ 源清单为空：检查 config.yaml 的 live.urls_static / local_dir 是否配置")
+        return [], []
+    fcfg = cfg.get("fetch", {}) or {}
+    timeout = int(fcfg.get("timeout", 30))
+    cache_on = bool(fcfg.get("cache", True))
+    cache_ttl = int(fcfg.get("cache_ttl_seconds", 0) or 0)
+    if cache_on:
+        Path(cfg.get("cache_dir", "sources_cache")).mkdir(parents=True, exist_ok=True)
+
+    if (cfg.get("fetch", {}) or {}).get("serial"):
+        log.info("🐢 源抓取：串行模式")
+        return _discover_live_serial(cfg)
+    tasks = [s for s in sources
+             if s.get("source_type", "network") == "static"
+             or s.get("enabled", True) is not False]
+    entries, reports = _run_sources(tasks, cfg, timeout, cache_on, cache_ttl)
+
+    cache_hits = sum(1 for r in reports if r.get("cached"))
+    cache_stale_hits = sum(1 for r in reports if r.get("stale"))
+    cache_writes = sum(1 for r in reports if r.pop("_cache_written", False))
+    cache_rejected = sum(1 for r in reports if r.pop("_cache_rejected", False))
+    for r in reports:
+        r.pop("_cache_written", None)
+        r.pop("_cache_rejected", None)
+
+    if _JUNK_STATS['dropped']:
+        top = sorted(_JUNK_STATS['by_source'].items(), key=lambda x: -x[1])[:5]
+        log.info(f"🧹 已丢弃 {_JUNK_STATS['dropped']} 条无意义频道名（URL 分片/纯路径），"
+                 f"主要来源：{', '.join(f'{k}×{v}' for k, v in top)}")
+    log.info(f"📡 发现 {len(sources)} 个源（网络 + 本地 + static），"
+             f"抓取到 {len(entries)} 条原始线路")
+    global _LAST_CACHE_STATS
+    _LAST_CACHE_STATS = {
+        "enabled": cache_on, "hits": cache_hits,
+        "stale_hits": cache_stale_hits, "writes": cache_writes,
+        "rejected": cache_rejected,
+    }
+    return entries, reports
+
+
+def _discover_live_serial(cfg: dict) -> Tuple[List[Entry], List[dict]]:
+    """保留原串行实现，供 --serial 调试开关使用（并发出问题时可回退对照）。"""
     sources = [s for s in build_sources(cfg) if s.get("type") == "live"]
     if not sources:
         log.error("❌ 源清单为空：检查 config.yaml 的 live.urls_static / local_dir 是否配置")
@@ -512,7 +727,7 @@ def discover_live(cfg: dict) -> Tuple[List[Entry], List[dict]]:
             continue
 
         if src_type == "static":
-            log.info(f" 📌 本地静态源 [{name}] → 直接载入")
+            log.info(f"  📌 本地静态源 [{name}] → 直接载入")
             ents = _parse_static_source(src)
             reports.append({
                 "source": name, "type": "static", "ok": True,
@@ -523,9 +738,9 @@ def discover_live(cfg: dict) -> Tuple[List[Entry], List[dict]]:
 
         # 网络源 / 本地文件源
         if src_type == "local":
-            log.info(f" 📁 本地源 [{name}] {url}")
+            log.info(f"  📁 本地源 [{name}] {url}")
         else:
-            log.info(f" 🌐 网络源 [{name}] {url}")
+            log.info(f"  🌐 网络源 [{name}] {url}")
 
         # 带签名/会过期的地址不缓存：URL 一变，旧内容没有复用价值
         ephemeral = ("refresh" in (src.get("tags") or [])) or (src.get("ephemeral") is True)
@@ -541,7 +756,7 @@ def discover_live(cfg: dict) -> Tuple[List[Entry], List[dict]]:
                     if k in meta:
                         info[k] = meta[k]
                 cache_hits += 1
-                log.info(f" ↳ 命中缓存（{meta.get('cache_age_hours', '?')} 小时前）")
+                log.info(f"      ↳ 命中缓存（{meta.get('cache_age_hours', '?')} 小时前）")
 
         if text is None:
             text, info = fetch_with_fallback(
@@ -556,19 +771,19 @@ def discover_live(cfg: dict) -> Tuple[List[Entry], List[dict]]:
                             info[k] = meta[k]
                     info["stale"] = True
                     cache_stale_hits += 1
-                    log.warning(f" ↳ 抓取失败，退化使用过期缓存"
+                    log.warning(f"      ↳ 抓取失败，退化使用过期缓存"
                                 f"（{meta.get('cache_age_hours', '?')} 小时前）")
 
         if text is None:
-            log.error(f" ✗ 抓取失败：{info.get('error')}")
+            log.error(f"      ✗ 抓取失败：{info.get('error')}")
             reports.append({
                 "source": name, "type": src_type, "ok": False,
                 "error": info.get("error"), "entries": 0, "cached": False,
             })
             continue
 
-        log.info(f" ✓ {info.get('bytes', 0)} 字节 / {round(info.get('elapsed', 0), 1)}s"
-                 f"{' [缓存]' if info.get('from_cache') else ''}")
+        log.info(f"      ✓ {info.get('bytes', 0)} 字节 / {round(info.get('elapsed', 0), 1)}s"
+                 f"{'  [缓存]' if info.get('from_cache') else ''}")
         ents = _parse_live_text(text, src)
 
         # 回写缓存：只写本轮真实抓到的内容，过期退化不刷新时间戳
@@ -577,7 +792,7 @@ def discover_live(cfg: dict) -> Tuple[List[Entry], List[dict]]:
                 cache_writes += 1
             elif not _looks_like_playlist(text):
                 cache_rejected += 1
-                log.warning(" ⚠ 内容不像播放列表，保留原缓存不覆盖")
+                log.warning("      ⚠ 内容不像播放列表，保留原缓存不覆盖")
 
         reports.append({
             "source": name, "type": src_type, "ok": True,
@@ -605,9 +820,54 @@ def _parse_live_text(text: str, src: dict) -> List[Entry]:
     if not text:
         return []
     head = text.lstrip()[:100]
-    if "#EXTM3U" in head or "#EXTINF" in head:
-        return _parse_m3u(text, src)
-    return _parse_txt_live(text, src)
+    ents = _parse_m3u(text, src) if ("#EXTM3U" in head or "#EXTINF" in head)         else _parse_txt_live(text, src)
+    if ents:
+        kept = [e for e in ents if not is_junk_channel_name(e.name)]
+        dropped = len(ents) - len(kept)
+        if dropped:
+            _JUNK_STATS['dropped'] += dropped
+            by = _JUNK_STATS.setdefault('by_source', {})
+            _s = src.get('name', '?')
+            by[_s] = by.get(_s, 0) + dropped
+            ents = kept
+    return ents
+
+
+# ── 垃圾频道名识别 ────────────────────────────────────────────
+# 有些源（尤其 ts 分片直链、CDN 回源地址）没有真实频道名，解析器只能拿
+# URL 路径片段当名字，于是出现 "1080p/0/000090a4684ff15b_1854b18_170618.ts"
+# 这类条目。它们即便探活成功也没法用：播放器里是一串乱码，且同名条目会
+# 互相污染分组。这里在解析入口就识别并丢弃，避免进入候选池白耗探测配额。
+
+_JUNK_NAME_PATTERNS = [
+    # 纯路径/分片：以 / 开头或含多个 / 段
+    re.compile(r"^/[^\s]*$"),
+    re.compile(r"^[^\s]*/[^\s]*/[^\s]*$"),
+    # ts/m4s 分片文件名（带 hash 下划线串）
+    re.compile(r"(?i)[0-9a-f]{6,}_[0-9a-f]{4,}"),
+    # 裸分片扩展名结尾
+    re.compile(r"(?i)\.(ts|m4s|m4a|aac|mp4|flv)(\?|$)"),
+    # 纯数字 / 纯 hash / 纯序号
+    re.compile(r"^[0-9a-fA-F]{8,}$"),
+    re.compile(r"^[0-9]{1,4}$"),
+    # 协议残留当名字
+    re.compile(r"(?i)^(http|https|rtmp|rtsp):"),
+    # 纯占位符
+    re.compile(r"^(none|null|nil|undefined|unknown|-+|\.+)$", re.I),
+]
+
+# 合法频道名至少要有这类字符（台名/中文/字母词），纯路径片段过不了
+_VALID_NAME_RE = re.compile(r"[\u4e00-\u9fa5A-Za-z]")
+
+
+def is_junk_channel_name(name: str) -> bool:
+    """判断频道名是否是无意义的 URL 片段。空名不算垃圾（由调用方另行按缺名处理）。"""
+    n = (name or "").strip()
+    if not n:
+        return False
+    if not _VALID_NAME_RE.search(n):
+        return True
+    return any(p.search(n) for p in _JUNK_NAME_PATTERNS)
 
 
 def _parse_m3u(text: str, src: dict) -> List[Entry]:
@@ -627,6 +887,12 @@ def _parse_m3u(text: str, src: dict) -> List[Entry]:
             quality = ""
             if cur:
                 name = cur["attrs"].get("tvg-name") or cur["attrs"].get("name") or ""
+                # 名字是 URL 片段（分片/纯路径/裸 hash）的条目直接丢弃：
+                # 探活了也没法用，还会白占该频道的候选配额
+                if is_junk_channel_name(name):
+                    _junk_drop(src)
+                    cur = None
+                    continue
                 tvg_id = cur["attrs"].get("tvg-id", "") or ""
                 logo = cur["attrs"].get("tvg-logo", "") or ""
                 group = cur["attrs"].get("group-title", "") or ""
@@ -682,6 +948,9 @@ def _parse_txt_live(text: str, src: dict) -> List[Entry]:
         url = m.group(2).strip()
         if not name or not url:
             continue
+        if is_junk_channel_name(name):
+            _junk_drop(src)
+            continue
         quality = _quality_from_text(name + " " + url)
         out.append(Entry(
             url=url, name=name, group=current_group,
@@ -721,11 +990,15 @@ def _parse_static_source(src: dict) -> List[Entry]:
 
 
 # ═════════════════════════════════════════════════════════════
-# 全局 URL 去重
+#  全局 URL 去重
 # ═════════════════════════════════════════════════════════════
 
-def _dedup_entries(entries: List[Entry], enabled: bool = True) -> Tuple[List[Entry], dict]:
-    """ 全局 URL 去重：同一条 URL 只保留首次出现的条目。 返回 (去重后列表, 统计) """
+def _dedup_entries(entries: List[Entry],
+                   enabled: bool = True) -> Tuple[List[Entry], dict]:
+    """
+    全局 URL 去重：同一条 URL 只保留首次出现的条目。
+    返回 (去重后列表, 统计)
+    """
     if not enabled:
         return entries, {"removed": 0, "kept": len(entries)}
     seen: set = set()
@@ -744,7 +1017,7 @@ def _dedup_entries(entries: List[Entry], enabled: bool = True) -> Tuple[List[Ent
 
 
 # ═════════════════════════════════════════════════════════════
-# 画质识别
+#  画质识别
 # ═════════════════════════════════════════════════════════════
 
 _QUAL_RANK = [
@@ -780,27 +1053,27 @@ def _quality_from_text(text: str) -> str:
 
 
 # ═════════════════════════════════════════════════════════════
-# 频道归一化（核心：4K/4、8K/8 必须分开）
+#  频道归一化（核心：4K/4、8K/8 必须分开）
 # ═════════════════════════════════════════════════════════════
 #
 # 规则说明
-# · 画质词（4K/8K/UHD/HD/…）剥离为独立【画质维度】，追加在 key 末尾；
-# · 剥离画质后剩余的"名称+序号"相同的，画质不同则归为【不同频道】；
-# 卫视4K ≠ 卫视4 ← 一个带 4K 画质，一个不带
-# CCTV4K ≠ CCTV4 ← 同上
-# 卫视8K ≠ 卫视8 ← 同上
-# · 画质维度不参与"同频道归组"，只参与"差异记录"。
+#   · 画质词（4K/8K/UHD/HD/…）剥离为独立【画质维度】，追加在 key 末尾；
+#   · 剥离画质后剩余的"名称+序号"相同的，画质不同则归为【不同频道】；
+#       卫视4K  ≠  卫视4        ← 一个带 4K 画质，一个不带
+#       CCTV4K  ≠  CCTV4       ← 同上
+#       卫视8K  ≠  卫视8        ← 同上
+#   · 画质维度不参与"同频道归组"，只参与"差异记录"。
 #
 # 反例（你强调必须区分）
-# "4K影视" 与 "影视4" 是完全不同的两个频道名，不会被混淆。
+#   "4K影视" 与 "影视4" 是完全不同的两个频道名，不会被混淆。
 # ═════════════════════════════════════════════════════════════
 
 # 画质词：支持「数字与画质词粘连」写法，如 CCTV4K / 卫视8KHD / 卫视4
 # 匹配规则：
-# · 4K / 8K / 4KHD / 8KHD —— 前后可以是字母数字或结尾
-# · UHD / FHD / HEVC / HDR / H265 / H264 —— 同上
-# · HD / SD —— 仅在非数字后匹配，避免把 CCTV4 的尾数字误当 HD
-# · 中文画质词单独匹配
+#   · 4K / 8K / 4KHD / 8KHD —— 前后可以是字母数字或结尾
+#   · UHD / FHD / HEVC / HDR / H265 / H264 —— 同上
+#   · HD / SD —— 仅在非数字后匹配，避免把 CCTV4 的尾数字误当 HD
+#   · 中文画质词单独匹配
 # 数字型画质词（4K/8K/2160P 等）：数字前允许紧跟字母（CCTV4K），
 # 但要求数字本身紧邻画质字母，且画质字母后不能再跟字母数字。
 _QUAL_WORD = re.compile(
@@ -820,7 +1093,10 @@ _QUAL_CN = re.compile(r"(高清|超清|蓝光|原画|标清)")
 
 
 def _norm_num(raw: str) -> str:
-    """ 归一化频道序号：去掉前导零，使 CCTV-04 与 CCTV-4 视为同一频道。 纯 "0" 保留；含 ＋/+ 的序号（如 5+）保留符号只规整数字部分。 """
+    """
+    归一化频道序号：去掉前导零，使 CCTV-04 与 CCTV-4 视为同一频道。
+    纯 "0" 保留；含 ＋/+ 的序号（如 5+）保留符号只规整数字部分。
+    """
     if not raw:
         return ""
     m = re.match(r"^([0-9]*)([＋+]?)$", raw)
@@ -833,7 +1109,10 @@ def _norm_num(raw: str) -> str:
 
 
 def channel_key(raw: str) -> str:
-    """ 频道归一化键。 返回形如： cctv/n4/q4K cctv/n4 ws/湖南卫视/q4K ws/湖南卫视 """
+    """
+    频道归一化键。
+    返回形如：  cctv/n4/q4K   cctv/n4   ws/湖南卫视/q4K   ws/湖南卫视
+    """
     if not raw:
         return ""
     # 统一空白与分隔符
@@ -867,11 +1146,11 @@ def channel_key(raw: str) -> str:
     quals: List[str] = sorted(seen_q)
 
     # 2) 剥离画质词得到 body
-    # 关键：像 4K / 8K / 2160P 这类"数字+字母"的画质词，其中的数字同时
-    # 承载着频道序号语义（CCTV-4K 的 4 就是 CCTV4 的 4）。若整体剥离，
-    # CCTV-4K 会退化成 CCTV，与 CCTV-4 撞成同一频道。因此这里只剥离
-    # 字母部分，把开头的数字留在 body 里当序号用；画质维度仍完整记录在
-    # quals 中（q4K），靠它把 4K 与 4 区分开。
+    #    关键：像 4K / 8K / 2160P 这类"数字+字母"的画质词，其中的数字同时
+    #    承载着频道序号语义（CCTV-4K 的 4 就是 CCTV4 的 4）。若整体剥离，
+    #    CCTV-4K 会退化成 CCTV，与 CCTV-4 撞成同一频道。因此这里只剥离
+    #    字母部分，把开头的数字留在 body 里当序号用；画质维度仍完整记录在
+    #    quals 中（q4K），靠它把 4K 与 4 区分开。
     # 预处理：把 "4M1080 / 8M / 20M" 这类码率标记整段抹掉。
     # 否则 1080P 规则只吃掉 "1080"，残留裸 "4"，会被误当成频道序号
     # （东方卫视 4M1080 → 东方卫视4），导致同频道的线路被判成串线路。
@@ -885,9 +1164,9 @@ def channel_key(raw: str) -> str:
         mlead = re.match(r"^([0-9]+)", word)
         if mlead:
             # 情形 A：数字紧邻台名前缀（CCTV4K / CCTV16-4K）→ 该数字就是
-            # 频道序号本身，整词剥离，序号由 body 里原有的数字承担。
+            #         频道序号本身，整词剥离，序号由 body 里原有的数字承担。
             # 情形 B：数字前已有别的序号或中文（卫视4K / 东方卫视4K）→
-            # 数字是画质词的一部分，保留它当序号，只屏蔽字母。
+            #         数字是画质词的一部分，保留它当序号，只屏蔽字母。
             # 看紧邻画质词左边的字符：是数字（CCTV-4|K、CCTV16-|4K 经分隔符
             # 归一后紧邻）→ 该数字即序号，整词剥离；否则（卫视4K 的 4 前面
             # 是"视"）保留数字当序号。
@@ -907,7 +1186,7 @@ def channel_key(raw: str) -> str:
     body = "".join(c for i, c in enumerate(s) if not mask[i])
 
     # 3) body 拆成 head(字母/中文) + 序号 + 尾缀
-    # 序号只取纯数字与「＋/+」（画质词已在前面剥离，这里不能再吞掉）
+    #    序号只取纯数字与「＋/+」（画质词已在前面剥离，这里不能再吞掉）
     head_parts: List[str] = []
     num = ""
     suf = ""
@@ -973,7 +1252,7 @@ def channel_key(raw: str) -> str:
 
 
 # ═════════════════════════════════════════════════════════════
-# 串线路判定
+#  串线路判定
 # ═════════════════════════════════════════════════════════════
 
 def _chan_core_from_key(key: str) -> str:
@@ -984,7 +1263,14 @@ def _chan_core_from_key(key: str) -> str:
 
 
 def canonical_channel_name(ents: List["Entry"], key: str) -> str:
-    """ 从同一频道分组的条目里挑出最"干净"的名字作为该组的规范频道名。 规则：在所有 channel_key(name) == 组 key 的候选名中，取长度最短者。 最短的名字通常没有"线路1/超清/备用/高清版"之类杂项后缀，最接近真实 频道名。用它当串线路判定锚点，可避免 ents[0] 恰好是带一堆后缀的名字时， 把自己组的正常线路误杀。 """
+    """
+    从同一频道分组的条目里挑出最"干净"的名字作为该组的规范频道名。
+
+    规则：在所有 channel_key(name) == 组 key 的候选名中，取长度最短者。
+    最短的名字通常没有"线路1/超清/备用/高清版"之类杂项后缀，最接近真实
+    频道名。用它当串线路判定锚点，可避免 ents[0] 恰好是带一堆后缀的名字时，
+    把自己组的正常线路误杀。
+    """
     key_core = _chan_core_from_key(key)
     best = ""
     _best_sel = None
@@ -1029,7 +1315,15 @@ def _chan_core(name: str) -> str:
 
 
 def is_likely_cross_wire(entry: Entry, anchor_name: str) -> bool:
-    """ 判定 entry 是否为"串线路"——即它的名称/画质与所属频道不符。 判定唯一事实来源是 channel_key()：只要线路名归一化后的 key 与所属 频道 key 不同，即视为串线路。这样"4K 与 4 分家""8K 与 8 分家"等 规则只需在 channel_key 里维护一份，本函数不会再与归一化逻辑漂移。 仅有的豁免：线路名缺失时无法判定，保守返回 False（不丢弃）。 """
+    """
+    判定 entry 是否为"串线路"——即它的名称/画质与所属频道不符。
+
+    判定唯一事实来源是 channel_key()：只要线路名归一化后的 key 与所属
+    频道 key 不同，即视为串线路。这样"4K 与 4 分家""8K 与 8 分家"等
+    规则只需在 channel_key 里维护一份，本函数不会再与归一化逻辑漂移。
+
+    仅有的豁免：线路名缺失时无法判定，保守返回 False（不丢弃）。
+    """
     if not anchor_name or not entry.name:
         return False
     a = anchor_name.strip()
@@ -1071,14 +1365,17 @@ def _strip_all_qual(s: str) -> str:
 
 
 def _channel_keywords(s: str) -> set:
-    """ 提取频道名里的"频道标识"集合，用于判断两个名称是否属于同一频道。 这里的标识必须足够"具体"，命中即认为是同一个频道/台。 """
+    """
+    提取频道名里的"频道标识"集合，用于判断两个名称是否属于同一频道。
+    这里的标识必须足够"具体"，命中即认为是同一个频道/台。
+    """
     if not s:
         return set()
     s2 = s.upper()
     kw = set()
 
     # CCTV / CETV 系列：用「前缀 + 序号 + 画质」作为标识
-    # CCTV4 / CCTV4K / CCTV5+ / CCTV8K 各自独立，避免互相误判为同频道
+    #    CCTV4 / CCTV4K / CCTV5+ / CCTV8K 各自独立，避免互相误判为同频道
     m = re.match(r"^(CCTV|CETV|IPTV)\s*([0-9A-Z＋+]*)\s*(.*)$", s2)
     if m:
         prefix = m.group(1).lower()
@@ -1091,8 +1388,8 @@ def _channel_keywords(s: str) -> set:
             kw.add(prefix)
 
     # 卫视：支持两种结构
-    # · 卫视在前：卫视 + 序号 + 画质 （如 卫视4K / 卫视8 / 卫视4）
-    # · 卫视在后：地域 + 卫视 + 序号 + 画质 （如 湖南卫视4K / 浙江卫视）
+    #   · 卫视在前：卫视 + 序号 + 画质  （如 卫视4K / 卫视8 / 卫视4）
+    #   · 卫视在后：地域 + 卫视 + 序号 + 画质  （如 湖南卫视4K / 浙江卫视）
     # 避免把 卫视4 / 卫视8 / 卫视4K 当成同一频道
     m = re.match(r"^(卫视)\s*([0-9＋+]*)\s*(.*)$", s)
     if m:
@@ -1132,7 +1429,7 @@ def _channel_keywords(s: str) -> set:
 
 
 # ═════════════════════════════════════════════════════════════
-# 阶段一：抓取 + 整理 + 去重
+#  阶段一：抓取 + 整理 + 去重
 # ═════════════════════════════════════════════════════════════
 
 def _entry_source_rank(e: Entry, cfg: dict = None) -> int:
@@ -1162,7 +1459,91 @@ def _entry_quality_rank(e: Entry) -> int:
 
 # 国内（APNIC/CNNIC 分配给中国大陆）常见 IPv4 段，CIDR 写法。
 # 仅用于排序：命中的排前面先测；没命中的不会被丢弃，只是排后面测。
-_CN_CIDRS = """ 1.0.1.0/24 1.0.2.0/23 1.0.8.0/21 1.0.32.0/19 1.1.0.0/24 1.1.2.0/23 1.1.4.0/22 1.1.8.0/21 1.1.16.0/20 1.2.0.0/23 1.2.2.0/23 1.2.4.0/22 1.2.8.0/21 1.2.16.0/20 1.4.1.0/24 1.8.0.0/16 1.12.0.0/14 1.24.0.0/13 1.48.0.0/12 1.68.0.0/14 1.80.0.0/12 1.116.0.0/15 1.118.0.0/16 1.119.0.0/24 1.180.0.0/14 1.184.0.0/15 1.192.0.0/13 1.200.0.0/13 8.128.0.0/10 14.0.0.0/9 14.128.0.0/9 27.0.128.0/17 27.8.0.0/13 27.16.0.0/12 27.32.0.0/12 27.48.0.0/14 27.54.0.0/17 27.98.176.0/22 27.98.208.0/20 27.99.128.0/17 27.103.0.0/16 27.106.128.0/17 27.112.0.0/12 27.128.0.0/11 27.159.232.0/21 27.184.0.0/13 27.192.0.0/11 36.0.0.0/10 36.96.0.0/11 36.128.0.0/10 36.192.0.0/11 36.224.0.0/12 36.248.0.0/13 39.0.0.0/8 42.0.0.0/9 42.128.0.0/9 43.224.0.0/11 47.92.0.0/14 47.96.0.0/11 49.64.0.0/10 49.128.0.0/9 51.0.0.0/16 52.80.0.0/12 52.128.0.0/9 54.222.0.0/15 56.0.0.0/9 57.240.0.0/12 58.16.0.0/13 58.24.0.0/15 58.30.0.0/15 58.32.0.0/11 58.64.0.0/12 58.80.0.0/13 58.96.0.0/12 58.112.0.0/12 58.128.0.0/13 58.144.0.0/12 58.192.0.0/11 59.32.0.0/11 59.64.0.0/10 60.0.0.0/11 60.55.0.0/16 60.63.0.0/16 60.160.0.0/11 60.194.0.0/15 60.200.0.0/13 60.208.0.0/12 60.232.0.0/13 60.240.0.0/12 61.4.80.0/20 61.8.0.0/13 61.16.0.0/12 61.48.0.0/13 61.128.0.0/10 61.240.0.0/13 101.0.0.0/12 101.16.0.0/12 101.32.0.0/11 101.64.0.0/10 101.128.0.0/9 101.224.0.0/12 101.248.0.0/16 103.1.168.0/22 103.3.132.0/22 103.5.80.0/22 103.6.216.0/22 103.9.140.0/22 103.15.200.0/21 103.16.16.0/20 103.20.112.0/21 103.21.148.0/22 103.22.8.0/21 103.22.136.0/22 103.23.32.0/21 103.24.192.0/22 103.25.8.0/21 103.30.0.0/15 103.37.0.0/16 103.39.16.0/20 103.40.12.0/22 103.43.200.0/22 103.47.200.0/21 103.48.108.0/22 103.49.124.0/22 103.51.32.0/21 103.52.180.0/22 103.53.4.0/22 103.53.144.0/21 103.54.36.0/22 103.55.152.0/22 103.56.48.0/20 103.57.152.0/22 103.59.148.0/22 103.60.56.0/21 103.62.80.0/21 103.62.160.0/22 103.62.210.0/23 106.0.0.0/8 107.0.0.0/8 110.16.0.0/12 110.32.0.0/11 110.64.0.0/10 110.128.0.0/9 111.0.0.0/10 111.64.0.0/11 111.96.0.0/12 111.112.0.0/12 111.128.0.0/9 112.0.0.0/10 112.64.0.0/11 112.96.0.0/11 112.128.0.0/9 113.0.0.0/13 113.8.0.0/15 113.11.0.0/16 113.12.0.0/14 113.16.0.0/13 113.24.0.0/14 113.44.0.0/14 113.48.0.0/12 113.64.0.0/10 113.128.0.0/9 114.28.0.0/15 114.30.0.0/16 114.32.0.0/11 114.64.0.0/12 114.80.0.0/13 114.96.0.0/11 114.128.0.0/9 115.24.0.0/13 115.32.0.0/11 115.64.0.0/10 115.128.0.0/9 116.0.0.0/13 116.8.0.0/14 116.13.0.0/16 116.16.0.0/12 116.32.0.0/11 116.64.0.0/10 116.128.0.0/9 117.8.0.0/13 117.21.0.0/17 117.22.0.0/15 117.24.0.0/13 117.32.0.0/11 117.64.0.0/10 117.128.0.0/9 118.24.0.0/13 118.64.0.0/10 118.112.0.0/12 118.128.0.0/9 119.0.0.0/13 119.8.0.0/16 119.16.0.0/12 119.32.0.0/11 119.64.0.0/10 119.128.0.0/9 120.0.0.0/12 120.16.0.0/16 120.24.0.0/13 120.32.0.0/11 120.64.0.0/10 120.128.0.0/9 121.0.0.0/9 121.128.0.0/10 121.192.0.0/11 121.224.0.0/12 122.0.0.0/9 122.128.0.0/10 122.192.0.0/11 123.0.0.0/12 123.16.0.0/13 123.24.0.0/15 123.50.0.0/16 123.52.0.0/14 123.56.0.0/13 123.64.0.0/11 123.96.0.0/15 123.98.0.0/16 123.99.0.0/17 123.100.0.0/16 123.101.0.0/17 123.108.0.0/14 123.112.0.0/12 123.128.0.0/9 123.244.0.0/14 123.248.0.0/13 124.6.0.0/15 124.8.0.0/13 124.16.0.0/12 124.32.0.0/11 124.64.0.0/10 124.128.0.0/9 125.31.192.0/18 125.32.0.0/11 125.64.0.0/10 125.128.0.0/9 126.0.0.0/8 139.0.0.0/16 139.2.0.0/15 139.4.0.0/14 139.8.0.0/13 139.16.0.0/12 139.32.0.0/11 139.64.0.0/10 139.128.0.0/9 140.64.0.0/10 140.128.0.0/9 140.240.0.0/12 144.0.0.0/9 150.0.0.0/10 150.64.0.0/11 150.96.0.0/12 150.112.0.0/13 153.0.0.0/16 153.2.0.0/15 153.4.0.0/14 153.8.0.0/13 153.16.0.0/12 153.32.0.0/11 153.64.0.0/10 153.128.0.0/9 157.0.0.0/16 157.61.0.0/17 157.66.0.0/16 157.68.0.0/14 157.72.0.0/13 157.80.0.0/12 157.96.0.0/11 157.128.0.0/9 159.226.0.0/16 161.207.0.0/16 162.105.0.0/16 163.0.0.0/8 164.52.0.0/14 166.111.0.0/16 167.139.0.0/16 167.189.64.0/18 168.160.0.0/11 169.65.32.0/19 171.8.0.0/13 171.16.0.0/12 171.32.0.0/11 171.64.0.0/10 171.104.0.0/13 171.112.0.0/12 171.208.0.0/12 175.0.0.0/12 175.16.0.0/13 175.24.0.0/14 175.30.0.0/15 175.42.0.0/15 175.44.0.0/14 175.48.0.0/12 175.64.0.0/11 175.96.0.0/10 175.128.0.0/9 176.58.96.0/20 177.136.0.0/13 180.64.0.0/10 180.128.0.0/9 182.0.0.0/12 182.16.0.0/13 182.24.0.0/14 182.32.0.0/11 182.64.0.0/10 182.128.0.0/9 183.0.0.0/10 183.64.0.0/11 183.96.0.0/12 183.112.0.0/12 183.128.0.0/9 185.66.16.0/22 202.0.128.0/17 202.4.128.0/19 202.5.208.0/20 202.6.176.0/20 202.8.0.0/16 202.10.192.0/19 202.12.0.0/16 202.14.0.0/16 202.20.0.0/16 202.21.0.0/16 202.27.184.0/21 202.38.0.0/16 202.41.0.0/16 202.43.144.0/20 202.45.80.0/20 202.46.160.0/19 202.62.0.0/15 202.64.0.0/15 202.73.160.0/19 202.75.208.0/20 202.84.0.0/15 202.86.192.0/19 202.90.0.0/15 202.92.0.0/14 202.96.0.0/12 202.112.0.0/13 202.120.0.0/13 202.136.0.0/13 202.144.0.0/12 202.160.0.0/12 202.176.0.0/12 202.192.0.0/11 203.0.4.0/22 203.0.8.0/21 203.1.16.0/20 203.2.112.0/20 203.4.128.0/19 203.5.0.0/16 203.6.0.0/15 203.8.0.0/16 203.9.0.0/16 203.10.0.0/16 203.11.128.0/17 203.12.0.0/16 203.14.0.0/16 203.15.160.0/19 203.16.0.0/16 203.17.128.0/17 203.18.0.0/16 203.19.0.0/16 203.20.0.0/14 203.24.0.0/14 203.28.0.0/15 203.30.0.0/16 203.31.0.0/17 203.56.0.0/16 203.57.0.0/16 203.62.0.0/16 203.76.0.0/16 203.80.0.0/12 203.86.0.0/16 203.88.0.0/15 203.90.0.0/16 203.91.0.0/17 203.92.0.0/16 203.93.0.0/16 203.94.0.0/15 203.96.0.0/12 203.112.0.0/13 203.128.0.0/13 203.144.0.0/12 203.160.0.0/12 203.176.0.0/12 203.196.0.0/14 203.207.128.0/17 210.2.0.0/15 210.5.0.0/16 210.7.0.0/16 210.12.0.0/16 210.14.0.0/15 210.16.0.0/14 210.21.0.0/16 210.22.0.0/15 210.25.0.0/16 210.26.0.0/15 210.32.0.0/14 210.36.0.0/16 210.40.0.0/13 210.48.0.0/14 210.52.0.0/15 210.56.0.0/14 210.72.0.0/14 210.76.0.0/15 210.78.0.0/16 210.79.64.0/18 210.82.0.0/15 210.87.128.0/17 210.192.0.0/11 211.64.0.0/11 211.96.0.0/12 211.136.0.0/13 211.144.0.0/12 211.160.0.0/13 218.0.0.0/11 218.32.0.0/11 218.64.0.0/10 218.128.0.0/9 219.72.0.0/13 219.80.0.0/12 219.128.0.0/9 220.160.0.0/11 220.192.0.0/10 221.0.0.0/12 221.16.0.0/13 221.128.0.0/9 222.16.0.0/12 222.32.0.0/11 222.64.0.0/10 222.128.0.0/9 223.0.0.0/12 223.20.0.0/15 223.64.0.0/10 223.96.0.0/12 223.112.0.0/12 223.128.0.0/9 223.240.0.0/13 223.248.0.0/14 223.252.0.0/15 223.254.0.0/16 223.255.252.0/22 """
+_CN_CIDRS = """
+1.0.1.0/24 1.0.2.0/23 1.0.8.0/21 1.0.32.0/19 1.1.0.0/24 1.1.2.0/23 1.1.4.0/22
+1.1.8.0/21 1.1.16.0/20 1.2.0.0/23 1.2.2.0/23 1.2.4.0/22 1.2.8.0/21 1.2.16.0/20
+1.4.1.0/24 1.8.0.0/16 1.12.0.0/14 1.24.0.0/13 1.48.0.0/12 1.68.0.0/14
+1.80.0.0/12 1.116.0.0/15 1.118.0.0/16 1.119.0.0/24 1.180.0.0/14 1.184.0.0/15
+1.192.0.0/13 1.200.0.0/13 8.128.0.0/10 14.0.0.0/9 14.128.0.0/9 27.0.128.0/17
+27.8.0.0/13 27.16.0.0/12 27.32.0.0/12 27.48.0.0/14 27.54.0.0/17 27.98.176.0/22
+27.98.208.0/20 27.99.128.0/17 27.103.0.0/16 27.106.128.0/17 27.112.0.0/12
+27.128.0.0/11 27.159.232.0/21 27.184.0.0/13 27.192.0.0/11 36.0.0.0/10 36.96.0.0/11
+36.128.0.0/10 36.192.0.0/11 36.224.0.0/12 36.248.0.0/13 39.0.0.0/8 42.0.0.0/9
+42.128.0.0/9 43.224.0.0/11 47.92.0.0/14 47.96.0.0/11 49.64.0.0/10 49.128.0.0/9
+51.0.0.0/16 52.80.0.0/12 52.128.0.0/9 54.222.0.0/15 56.0.0.0/9 57.240.0.0/12
+58.16.0.0/13 58.24.0.0/15 58.30.0.0/15 58.32.0.0/11 58.64.0.0/12 58.80.0.0/13
+58.96.0.0/12 58.112.0.0/12 58.128.0.0/13 58.144.0.0/12 58.192.0.0/11 59.32.0.0/11
+59.64.0.0/10 60.0.0.0/11 60.55.0.0/16 60.63.0.0/16 60.160.0.0/11 60.194.0.0/15
+60.200.0.0/13 60.208.0.0/12 60.232.0.0/13 60.240.0.0/12 61.4.80.0/20 61.8.0.0/13
+61.16.0.0/12 61.48.0.0/13 61.128.0.0/10 61.240.0.0/13 101.0.0.0/12 101.16.0.0/12
+101.32.0.0/11 101.64.0.0/10 101.128.0.0/9 101.224.0.0/12 101.248.0.0/16
+103.1.168.0/22 103.3.132.0/22 103.5.80.0/22 103.6.216.0/22 103.9.140.0/22
+103.15.200.0/21 103.16.16.0/20 103.20.112.0/21 103.21.148.0/22 103.22.8.0/21
+103.22.136.0/22 103.23.32.0/21 103.24.192.0/22 103.25.8.0/21 103.30.0.0/15
+103.37.0.0/16 103.39.16.0/20 103.40.12.0/22 103.43.200.0/22 103.47.200.0/21
+103.48.108.0/22 103.49.124.0/22 103.51.32.0/21 103.52.180.0/22 103.53.4.0/22
+103.53.144.0/21 103.54.36.0/22 103.55.152.0/22 103.56.48.0/20 103.57.152.0/22
+103.59.148.0/22 103.60.56.0/21 103.62.80.0/21 103.62.160.0/22 103.62.210.0/23
+106.0.0.0/8 107.0.0.0/8 110.16.0.0/12 110.32.0.0/11 110.64.0.0/10 110.128.0.0/9
+111.0.0.0/10 111.64.0.0/11 111.96.0.0/12 111.112.0.0/12 111.128.0.0/9 112.0.0.0/10
+112.64.0.0/11 112.96.0.0/11 112.128.0.0/9 113.0.0.0/13 113.8.0.0/15 113.11.0.0/16
+113.12.0.0/14 113.16.0.0/13 113.24.0.0/14 113.44.0.0/14 113.48.0.0/12 113.64.0.0/10
+113.128.0.0/9 114.28.0.0/15 114.30.0.0/16 114.32.0.0/11 114.64.0.0/12 114.80.0.0/13
+114.96.0.0/11 114.128.0.0/9 115.24.0.0/13 115.32.0.0/11 115.64.0.0/10 115.128.0.0/9
+116.0.0.0/13 116.8.0.0/14 116.13.0.0/16 116.16.0.0/12 116.32.0.0/11 116.64.0.0/10
+116.128.0.0/9 117.8.0.0/13 117.21.0.0/17 117.22.0.0/15 117.24.0.0/13 117.32.0.0/11
+117.64.0.0/10 117.128.0.0/9 118.24.0.0/13 118.64.0.0/10 118.112.0.0/12 118.128.0.0/9
+119.0.0.0/13 119.8.0.0/16 119.16.0.0/12 119.32.0.0/11 119.64.0.0/10 119.128.0.0/9
+120.0.0.0/12 120.16.0.0/16 120.24.0.0/13 120.32.0.0/11 120.64.0.0/10 120.128.0.0/9
+121.0.0.0/9 121.128.0.0/10 121.192.0.0/11 121.224.0.0/12 122.0.0.0/9
+122.128.0.0/10 122.192.0.0/11 123.0.0.0/12 123.16.0.0/13 123.24.0.0/15
+123.50.0.0/16 123.52.0.0/14 123.56.0.0/13 123.64.0.0/11 123.96.0.0/15
+123.98.0.0/16 123.99.0.0/17 123.100.0.0/16 123.101.0.0/17 123.108.0.0/14
+123.112.0.0/12 123.128.0.0/9 123.244.0.0/14 123.248.0.0/13 124.6.0.0/15
+124.8.0.0/13 124.16.0.0/12 124.32.0.0/11 124.64.0.0/10 124.128.0.0/9
+125.31.192.0/18 125.32.0.0/11 125.64.0.0/10 125.128.0.0/9 126.0.0.0/8
+139.0.0.0/16 139.2.0.0/15 139.4.0.0/14 139.8.0.0/13 139.16.0.0/12 139.32.0.0/11
+139.64.0.0/10 139.128.0.0/9 140.64.0.0/10 140.128.0.0/9 140.240.0.0/12
+144.0.0.0/9 150.0.0.0/10 150.64.0.0/11 150.96.0.0/12 150.112.0.0/13
+153.0.0.0/16 153.2.0.0/15 153.4.0.0/14 153.8.0.0/13 153.16.0.0/12 153.32.0.0/11
+153.64.0.0/10 153.128.0.0/9 157.0.0.0/16 157.61.0.0/17 157.66.0.0/16 157.68.0.0/14
+157.72.0.0/13 157.80.0.0/12 157.96.0.0/11 157.128.0.0/9 159.226.0.0/16
+161.207.0.0/16 162.105.0.0/16 163.0.0.0/8 164.52.0.0/14 166.111.0.0/16
+167.139.0.0/16 167.189.64.0/18 168.160.0.0/11 169.65.32.0/19 171.8.0.0/13
+171.16.0.0/12 171.32.0.0/11 171.64.0.0/10 171.104.0.0/13 171.112.0.0/12
+171.208.0.0/12 175.0.0.0/12 175.16.0.0/13 175.24.0.0/14 175.30.0.0/15
+175.42.0.0/15 175.44.0.0/14 175.48.0.0/12 175.64.0.0/11 175.96.0.0/10
+175.128.0.0/9 176.58.96.0/20 177.136.0.0/13 180.64.0.0/10 180.128.0.0/9
+182.0.0.0/12 182.16.0.0/13 182.24.0.0/14 182.32.0.0/11 182.64.0.0/10
+182.128.0.0/9 183.0.0.0/10 183.64.0.0/11 183.96.0.0/12 183.112.0.0/12
+183.128.0.0/9 185.66.16.0/22 202.0.128.0/17 202.4.128.0/19 202.5.208.0/20
+202.6.176.0/20 202.8.0.0/16 202.10.192.0/19 202.12.0.0/16 202.14.0.0/16
+202.20.0.0/16 202.21.0.0/16 202.27.184.0/21 202.38.0.0/16 202.41.0.0/16
+202.43.144.0/20 202.45.80.0/20 202.46.160.0/19 202.62.0.0/15 202.64.0.0/15
+202.73.160.0/19 202.75.208.0/20 202.84.0.0/15 202.86.192.0/19 202.90.0.0/15
+202.92.0.0/14 202.96.0.0/12 202.112.0.0/13 202.120.0.0/13 202.136.0.0/13
+202.144.0.0/12 202.160.0.0/12 202.176.0.0/12 202.192.0.0/11 203.0.4.0/22
+203.0.8.0/21 203.1.16.0/20 203.2.112.0/20 203.4.128.0/19 203.5.0.0/16
+203.6.0.0/15 203.8.0.0/16 203.9.0.0/16 203.10.0.0/16 203.11.128.0/17
+203.12.0.0/16 203.14.0.0/16 203.15.160.0/19 203.16.0.0/16 203.17.128.0/17
+203.18.0.0/16 203.19.0.0/16 203.20.0.0/14 203.24.0.0/14 203.28.0.0/15
+203.30.0.0/16 203.31.0.0/17 203.56.0.0/16 203.57.0.0/16 203.62.0.0/16
+203.76.0.0/16 203.80.0.0/12 203.86.0.0/16 203.88.0.0/15 203.90.0.0/16
+203.91.0.0/17 203.92.0.0/16 203.93.0.0/16 203.94.0.0/15 203.96.0.0/12
+203.112.0.0/13 203.128.0.0/13 203.144.0.0/12 203.160.0.0/12 203.176.0.0/12
+203.196.0.0/14 203.207.128.0/17 210.2.0.0/15 210.5.0.0/16 210.7.0.0/16
+210.12.0.0/16 210.14.0.0/15 210.16.0.0/14 210.21.0.0/16 210.22.0.0/15
+210.25.0.0/16 210.26.0.0/15 210.32.0.0/14 210.36.0.0/16 210.40.0.0/13
+210.48.0.0/14 210.52.0.0/15 210.56.0.0/14 210.72.0.0/14 210.76.0.0/15
+210.78.0.0/16 210.79.64.0/18 210.82.0.0/15 210.87.128.0/17 210.192.0.0/11
+211.64.0.0/11 211.96.0.0/12 211.136.0.0/13 211.144.0.0/12 211.160.0.0/13
+218.0.0.0/11 218.32.0.0/11 218.64.0.0/10 218.128.0.0/9 219.72.0.0/13
+219.80.0.0/12 219.128.0.0/9 220.160.0.0/11 220.192.0.0/10 221.0.0.0/12
+221.16.0.0/13 221.128.0.0/9 222.16.0.0/12 222.32.0.0/11 222.64.0.0/10
+222.128.0.0/9 223.0.0.0/12 223.20.0.0/15 223.64.0.0/10 223.96.0.0/12
+223.112.0.0/12 223.128.0.0/9 223.240.0.0/13 223.248.0.0/14 223.252.0.0/15
+223.254.0.0/16 223.255.252.0/22
+"""
 # 国内运营商常见 IPv6 前缀（电信 240e、联通 2408、移动 2409、教育网 2001:da8）
 _CN_IPV6_PREFIXES = ("240e", "2408", "2409", "2001:da8")
 _CN_HOST_KW = ("telecom", "unicom", "cmcc", "chinamobile", "chinatelecom",
@@ -1204,7 +1585,11 @@ def _is_domestic(url: str) -> bool:
 
 
 def _looks_like_playlist(text: str) -> bool:
-    """判断抓取到的内容是否像一份可用的播放列表。 用于缓存入库前的校验，避免把空响应、HTML 错误页、 登录页等坏内容写进缓存后长期复用。 """
+    """判断抓取到的内容是否像一份可用的播放列表。
+
+    用于缓存入库前的校验，避免把空响应、HTML 错误页、
+    登录页等坏内容写进缓存后长期复用。
+    """
     if not text or len(text.strip()) < 32:
         return False
     head = text.lstrip()[:2048]
@@ -1219,8 +1604,13 @@ def _looks_like_playlist(text: str) -> bool:
     return urlish >= max(1, len(lines[:50]) // 2)
 
 
-def fetch_and_dedup( cfg: dict) -> Tuple[Dict[str, List[Entry]], List[dict], dict]:
-    """ 阶段一：抓取 → 解析 → 全局去重 → 按频道归一化分组。 返回 (channels, source_reports, stats) channels: { channel_key: [Entry, ...] } """
+def fetch_and_dedup(
+    cfg: dict) -> Tuple[Dict[str, List[Entry]], List[dict], dict]:
+    """
+    阶段一：抓取 → 解析 → 全局去重 → 按频道归一化分组。
+    返回 (channels, source_reports, stats)
+        channels: { channel_key: [Entry, ...] }
+    """
     log.info("=" * 60)
     log.info("阶段一：抓取 + 整理 + 去重")
     t0 = time.time()
@@ -1250,7 +1640,7 @@ def fetch_and_dedup( cfg: dict) -> Tuple[Dict[str, List[Entry]], List[dict], dic
 
     log.info(f"📊 整理结果：{len(channels)} 个频道 / {len(entries)} 条去重后线路")
     if unnamed:
-        log.warning(f" ⚠ {unnamed} 条无频道名，已丢弃")
+        log.warning(f"   ⚠ {unnamed} 条无频道名，已丢弃")
 
     # 单频道候选排序：source 优先 + quality 优先 + 国内源优先
     for key in channels:
@@ -1267,7 +1657,7 @@ def fetch_and_dedup( cfg: dict) -> Tuple[Dict[str, List[Entry]], List[dict], dic
     if max_ch and len(channels) > max_ch:
         keep = sorted(channels.items(), key=lambda kv: -len(kv[1]))[:max_ch]
         channels = dict(keep)
-        log.info(f" (调试) 频道数截断至 {max_ch}")
+        log.info(f"   (调试) 频道数截断至 {max_ch}")
     if max_url:
         for k in channels:
             if len(channels[k]) > max_url:
@@ -1299,7 +1689,7 @@ def fetch_and_dedup( cfg: dict) -> Tuple[Dict[str, List[Entry]], List[dict], dic
 
 
 # ═════════════════════════════════════════════════════════════
-# 阶段二：探测 + 精选
+#  阶段二：探测 + 精选
 # ═════════════════════════════════════════════════════════════
 
 def _write_fetch_report(outdir: Path, src_reports: List[dict], dedup: dict) -> None:
@@ -1343,7 +1733,11 @@ _HARD_KEEP_CAP = 12
 
 
 def _quota_map(cfg: dict) -> Dict[int, int]:
-    """取当前生效的清晰度配额 {2160: n, 1080: n, 720: n} 晚高峰（live.peak_hours）用 res_quotas_peak，否则用 res_quotas； 前者缺失时沿用后者。 """
+    """取当前生效的清晰度配额 {2160: n, 1080: n, 720: n}
+
+    晚高峰（live.peak_hours）用 res_quotas_peak，否则用 res_quotas；
+    前者缺失时沿用后者。
+    """
     live = cfg.get("live", {}) or {}
     peak_hours = live.get("peak_hours", [19, 20, 21, 22, 23]) or []
     key = "res_quotas_peak" if dt.datetime.now().hour in peak_hours else "res_quotas"
@@ -1358,7 +1752,11 @@ def _quota_map(cfg: dict) -> Dict[int, int]:
 
 
 def _quota_for(quota: Dict[int, int], quality: str) -> int:
-    """某画质档在本频道里的保留名额 4K → 2160 档；1080p/720p 都归 HD，取 1080 与 720 两档之和； 8K 无对应配置档，按 4K 档处理；SD 不给名额。 """
+    """某画质档在本频道里的保留名额
+
+    4K → 2160 档；1080p/720p 都归 HD，取 1080 与 720 两档之和；
+    8K 无对应配置档，按 4K 档处理；SD 不给名额。
+    """
     if quality == "8K":
         return int(quota.get(2160, 4))
     if quality == "4K":
@@ -1381,7 +1779,8 @@ def per_source_cap(cfg: dict) -> int:
     return max(1, sum(quota.values()) or 1)
 
 
-def _select_candidates(entries: List[Entry], quality: str, qmin: int, qmax: int) -> List[Entry]:
+def _select_candidates(entries: List[Entry], quality: str,
+                       qmin: int, qmax: int) -> List[Entry]:
     """按画质偏好取候选：目标画质优先，兼顾其它清晰度兜底"""
     pool: List[Entry] = []
     pool += [e for e in entries if e.quality == quality]
@@ -1493,7 +1892,8 @@ def probe_url(url: str, cfg: dict, use_ffmpeg: bool = False) -> ProbeResult:
     return _http_probe(session, url, timeout)
 
 
-def _probe_batch(urls: Sequence[str], cfg: dict, use_ffmpeg: bool) -> Dict[str, ProbeResult]:
+def _probe_batch(urls: Sequence[str], cfg: dict,
+                 use_ffmpeg: bool) -> Dict[str, ProbeResult]:
     """带并发的批量探测，返回 {url: ProbeResult}"""
     max_workers = max(int(cfg.get("probe", {}).get("concurrency", 20)), 1)
     results: Dict[str, ProbeResult] = {}
@@ -1514,7 +1914,7 @@ def _probe_batch(urls: Sequence[str], cfg: dict, use_ffmpeg: bool) -> Dict[str, 
                 done += 1
                 if done % 200 == 0 or done == total:
                     ok_n = sum(1 for v in results.values() if v.ok)
-                    log.info(f" 探测进度 {done}/{total}（当前存活 {ok_n}）")
+                    log.info(f"   探测进度 {done}/{total}（当前存活 {ok_n}）")
     except ImportError:
         for u in urls:
             results[u] = probe_url(u, cfg, use_ffmpeg)
@@ -1522,15 +1922,18 @@ def _probe_batch(urls: Sequence[str], cfg: dict, use_ffmpeg: bool) -> Dict[str, 
 
 
 def aggregate_live(cfg: dict) -> dict:
-    """ 直播源聚合主流程。 返回统计字典。 """
+    """
+    直播源聚合主流程。
+    返回统计字典。
+    """
     outdir = Path(cfg.get("output_dir", "output"))
     outdir.mkdir(parents=True, exist_ok=True)
     use_ffmpeg = bool(cfg.get("probe", {}).get("use_ffmpeg", False))
 
     log.info("=" * 60)
     log.info("🎬 直播源聚合开始")
-    log.info(f" 输出目录：{outdir.resolve()}")
-    log.info(f" 探测方式：{'ffmpeg' if use_ffmpeg else 'http'}")
+    log.info(f"   输出目录：{outdir.resolve()}")
+    log.info(f"   探测方式：{'ffmpeg' if use_ffmpeg else 'http'}")
     t_total = time.time()
 
     # ── 阶段一 ──
@@ -1565,7 +1968,7 @@ def aggregate_live(cfg: dict) -> dict:
         anchor_name = canonical_channel_name(ents, key)
         clean = [e for e in cands if not is_likely_cross_wire(e, anchor_name)]
         if len(clean) != len(cands):
-            log.debug(f" {anchor_name} 剔除 {len(cands)-len(clean)} 条疑似串线路")
+            log.debug(f"   {anchor_name} 剔除 {len(cands)-len(clean)} 条疑似串线路")
         channel_plan.append((key, anchor_name, clean))
         all_candidates.extend(e.url for e in clean)
 
@@ -1695,11 +2098,11 @@ def aggregate_live(cfg: dict) -> dict:
     log.info(f"✅ 精选完成：{len(live_out)} 条 / "
              f"{len(set(e.name for e in live_out))} 频道")
     if quality_cnt:
-        log.info(" 画质分布：" + ", ".join(
+        log.info("   画质分布：" + ", ".join(
             f"{k}×{v}" for k, v in sorted(quality_cnt.items(), key=lambda x: -x[1])
         ))
     if fail_channels:
-        log.warning(f" ⚠ {len(fail_channels)} 个频道无存活线路："
+        log.warning(f"   ⚠ {len(fail_channels)} 个频道无存活线路："
                     f"{', '.join(fail_channels[:10])}")
 
     # ── 输出 ──
@@ -1719,41 +2122,22 @@ def aggregate_live(cfg: dict) -> dict:
         "elapsed": elapsed,
     }
     log.info(f"🏁 直播聚合完成（总耗时 {elapsed}s）")
-    log.info(f" 📁 {outdir}/live.m3u")
-    log.info(f" 📁 {outdir}/live.txt")
-    log.info(f" 📁 {outdir}/fetch_report.json")
+    log.info(f"   📁 {outdir}/live.m3u")
+    log.info(f"   📁 {outdir}/live.txt")
+    log.info(f"   📁 {outdir}/fetch_report.json")
     return stats
 
 
 # ═════════════════════════════════════════════════════════════
-# 输出写入
+#  输出写入
 # ═════════════════════════════════════════════════════════════
 
 def _esc(s: str) -> str:
     return (s or "").replace('"', "&quot;").replace("\n", " ").replace(",", "，")
 
-
 def _write_m3u(path: Path, entries: List[Entry]) -> None:
-    lines = ["#EXTM3U url-tracker-radar=\"useless\"", ""]
-    for e in entries:
-        attrs = []
-        if e.tvg_id:
-            attrs.append(f'tvg-id="{_esc(e.tvg_id)}"')
-        if e.name:
-            attrs.append(f'tvg-name="{_esc(e.name)}"')
-        if e.logo:
-            attrs.append(f'tvg-logo="{_esc(e.logo)}"')
-        if e.group:
-            attrs.append(f'group-title="{_esc(e.group)}"')
-        attr_str = " ".join(attrs)
-        extra = ""
-        if e.meta.get("elapsed"):
-            extra = f' _info="rt={e.meta["elapsed"]}s"'
-        inf = f"#EXTINF:-1 {attr_str},{_esc(e.name)}{extra}"
-        lines.append(inf)
-        lines.append(e.url)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
+    import m3u_fix
+    path.write_text(m3u_fix.render(entries), encoding="utf-8")
 
 def _write_txt(path: Path, entries: List[Entry]) -> None:
     lines: List[str] = []
@@ -1778,14 +2162,30 @@ def _write_db(cfg: dict, entries: List[Entry], quality_cnt: dict, st1: dict) -> 
              "tvg_id": e.tvg_id, "logo": e.logo, "source": e.source}
             for e in entries
         ])
-        log.info(f"💾 已写入数据库：{len(entries)} 条")
+        conn.commit()
         conn.close()
+        db.log_run_full(cfg, vd=0, vo=0,
+                        ld=int(st1.get("fetched", 0) or st1.get("deduped", 0) or 0),
+                        lc=len(set(e.name for e in entries)),
+                        ll=len(entries),
+                        dur=float(st1.get("elapsed", 0) or 0))
+        now_iso = dt.datetime.now().isoformat()
+        for e in entries:
+            m = e.meta or {}
+            db.record_live_probe_dict({
+                "url": e.url, "channel": e.name, "status": "ok",
+                "delay": float(m.get("elapsed", 0) or 0),
+                "resolution": int(m.get("resolution", 0) or 0),
+                "speed": float(m.get("speed", 0) or 0),
+                "score": float(m.get("score", 0) or 0),
+                "checked_at": now_iso})
+        log.info(f"💾 已写入数据库：{len(entries)} 条线路 + 本轮运行记录")
     except Exception as e:  # noqa
         log.warning(f"💾 数据库写入跳过：{e}")
 
 
 # ═════════════════════════════════════════════════════════════
-# 点播（完全保留，不改动逻辑）
+#  点播（完全保留，不改动逻辑）
 # ═════════════════════════════════════════════════════════════
 
 def run_vod(cfg: dict) -> dict:
@@ -1817,12 +2217,12 @@ def run_vod(cfg: dict) -> dict:
             url, src.get("fallbacks", []) or [], timeout=timeout
         )
         if text is None:
-            log.error(f" ✗ 点播源 {name} 抓取失败：{info.get('error')}")
+            log.error(f"  ✗ 点播源 {name} 抓取失败：{info.get('error')}")
             reports.append({"source": name, "ok": False,
                             "error": info.get("error")})
             continue
         items = _parse_vod(text, src)
-        log.info(f" ✓ 点播源 {name} → {len(items)} 条"
+        log.info(f"  ✓ 点播源 {name} → {len(items)} 条"
                  f"（{round(time.time()-t,1)}s）")
         reports.append({"source": name, "ok": True, "entries": len(items)})
         all_items.extend(items)
@@ -1877,7 +2277,7 @@ def run_vod(cfg: dict) -> dict:
     stats = {"items": len(uniq), "selected": len(selected),
              "by_category": dict(out["by_category"]), "elapsed": elapsed}
     log.info(f"✅ 点播聚合完成：{len(uniq)} → {len(selected)} 部（{elapsed}s）")
-    log.info(f" 📁 {fp}")
+    log.info(f"   📁 {fp}")
     return stats
 
 
@@ -1992,7 +2392,7 @@ def _strip_quotes(s: str) -> str:
 
 
 # ═════════════════════════════════════════════════════════════
-# 主入口
+#  主入口
 # ═════════════════════════════════════════════════════════════
 
 def load_config(path: str) -> dict:
@@ -2014,7 +2414,9 @@ def load_config(path: str) -> dict:
     probe_cfg = cfg.setdefault("probe", {})
     probe_cfg.setdefault("timeout", int(live_cfg.get("timeout", 10)))
     probe_cfg.setdefault("probe_timeout", int(live_cfg.get("probe_timeout", 6)))
-    probe_cfg.setdefault("concurrency", int(live_cfg.get("concurrency", 50)))
+    probe_cfg.setdefault("concurrency", int(live_cfg.get("concurrency", 15)))
+    fetch_cfg.setdefault("source_concurrency", int(live_cfg.get("source_concurrency", 8) or 8))
+    fetch_cfg.setdefault("serial", bool(live_cfg.get("serial", False)))
     probe_cfg.setdefault("use_ffmpeg", bool(live_cfg.get("use_ffmpeg", False)))
     probe_cfg.setdefault("cache", bool(live_cfg.get("probe_cache", True)))
     probe_cfg.setdefault("cache_ttl_seconds",
@@ -2046,6 +2448,8 @@ def main() -> int:
                         help="最多处理频道数（调试）")
     parser.add_argument("--max-urls", type=int, default=0,
                         help="每频道最多候选 URL（调试）")
+    parser.add_argument("--serial", action="store_true",
+                        help="源抓取改为串行（并发出问题时对照用）")
     parser.add_argument("--no-ffmpeg", action="store_true",
                         help="禁用 ffmpeg 探测")
     args = parser.parse_args()
@@ -2055,6 +2459,8 @@ def main() -> int:
     Flags.QUICK = args.quick
     Flags.MAX_FETCH_CHANNELS = args.max_channels
     Flags.MAX_FETCH_URLS = args.max_urls
+    if args.serial:
+        cfg.setdefault("fetch", {})["serial"] = True
     if args.no_ffmpeg:
         cfg.setdefault("probe", {})
         cfg["probe"]["use_ffmpeg"] = False
