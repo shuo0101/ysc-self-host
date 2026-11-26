@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-11-26T13:40:08.512230+00:00",
+  "generated_at": "2026-11-26T19:59:02.707101+00:00",
   "dedup": {
-    "removed": 3901,
-    "deduped": 13355
+    "removed": 3900,
+    "deduped": 13231
   },
   "sources": [
     {
@@ -11,9 +11,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.27,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.3,
       "stale": false
     },
     {
@@ -22,9 +22,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.21,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.3,
       "stale": false
     },
     {
@@ -33,9 +33,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.28,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.3,
       "stale": false
     },
     {
@@ -44,9 +44,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 296,
-      "elapsed": 0.18,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.3,
       "stale": false
     },
     {
@@ -55,9 +55,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.21,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.3,
       "stale": false
     },
     {
@@ -66,9 +66,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.21,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.3,
       "stale": false
     },
     {
@@ -77,9 +77,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.19,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.3,
       "stale": false
     },
     {
@@ -88,9 +88,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.21,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.3,
       "stale": false
     },
     {
@@ -99,16 +99,16 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.15,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.3,
       "stale": false
     },
     {
       "source": "static-list#10",
       "type": "network",
       "ok": false,
-      "error": "ConnectionError: HTTPSConnectionPool(host='raw.githubusercontent.com', port=443): Max retries exceeded with url: /vbskycn/iptv/refs/heads/master/tv/iptv4.m3u (Caused by ProtocolError('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer')))",
+      "error": "ConnectionError: HTTPSConnectionPool(host='raw.githubusercontent.com', port=443): Max retries exceeded with url: /vbskycn/iptv/refs/heads/master/tv/iptv4.m3u (Caused by NameResolutionError(\"HTTPSConnection(host='raw.githubusercontent.com', port=443): Failed to resolve 'raw.githubusercontent.com' ([Errno 7] No address associated with hostname)\"))",
       "entries": 0,
       "cached": false
     },
@@ -116,7 +116,7 @@
       "source": "static-list#11",
       "type": "network",
       "ok": false,
-      "error": "ConnectionError: HTTPSConnectionPool(host='raw.githubusercontent.com', port=443): Max retries exceeded with url: /vbskycn/iptv/refs/heads/master/tv/iptv4.txt (Caused by ProtocolError('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer')))",
+      "error": "ConnectionError: HTTPSConnectionPool(host='raw.githubusercontent.com', port=443): Max retries exceeded with url: /vbskycn/iptv/refs/heads/master/tv/iptv4.txt (Caused by NameResolutionError(\"HTTPSConnection(host='raw.githubusercontent.com', port=443): Failed to resolve 'raw.githubusercontent.com' ([Errno 7] No address associated with hostname)\"))",
       "entries": 0,
       "cached": false
     },
@@ -126,27 +126,24 @@
       "ok": true,
       "entries": 2951,
       "bytes": 904052,
-      "elapsed": 0.7,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 6.3,
       "stale": false
     },
     {
       "source": "static-list#13",
       "type": "network",
-      "ok": true,
-      "entries": 125,
-      "bytes": 29851,
-      "elapsed": 0.11,
-      "cached": false,
-      "cache_age_hours": 0,
-      "stale": false
+      "ok": false,
+      "error": "ConnectionError: HTTPConnectionPool(host='8.138.7.223', port=80): Max retries exceeded with url: /live.txt (Caused by NewConnectionError(\"HTTPConnection(host='8.138.7.223', port=80): Failed to establish a new connection: [Errno 101] Network is unreachable\"))",
+      "entries": 0,
+      "cached": false
     },
     {
       "source": "static-list#14",
       "type": "network",
       "ok": false,
-      "error": "HTTP 403",
+      "error": "ConnectionError: HTTPSConnectionPool(host='fs-im-kefu.7moor-fs1.com', port=443): Max retries exceeded with url: /ly/4d2c3f00-7d4c-11e5-af15-41bf63ae4ea0/1715581924111/live1.txt (Caused by NameResolutionError(\"HTTPSConnection(host='fs-im-kefu.7moor-fs1.com', port=443): Failed to resolve 'fs-im-kefu.7moor-fs1.com' ([Errno 7] No address associated with hostname)\"))",
       "entries": 0,
       "cached": false
     },
@@ -155,11 +152,11 @@
       "type": "network",
       "ok": true,
       "entries": 0,
-      "bytes": 348,
+      "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 6.2,
-      "stale": false
+      "cache_age_hours": 12.6,
+      "stale": true
     },
     {
       "source": "static-list#16",
@@ -169,14 +166,14 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 12.5,
+      "cache_age_hours": 18.8,
       "stale": true
     },
     {
       "source": "static-list#17",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPSConnectionPool(host='raw.bgithub.xyz', port=443): Max retries exceeded with url: /Ftindy/IPTV-URL/main/IPTV.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='raw.bgithub.xyz', port=443) at 0x7727075bd0>, 'Connection to raw.bgithub.xyz timed out. (connect timeout=20)'))",
+      "error": "ConnectionError: HTTPSConnectionPool(host='raw.bgithub.xyz', port=443): Max retries exceeded with url: /Ftindy/IPTV-URL/main/IPTV.m3u (Caused by NameResolutionError(\"HTTPSConnection(host='raw.bgithub.xyz', port=443): Failed to resolve 'raw.bgithub.xyz' ([Errno 7] No address associated with hostname)\"))",
       "entries": 0,
       "cached": false
     },
@@ -188,7 +185,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 58.4,
+      "cache_age_hours": 64.7,
       "stale": true
     },
     {
@@ -196,17 +193,17 @@
       "type": "network",
       "ok": true,
       "entries": 0,
-      "bytes": 851,
+      "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 6.2,
-      "stale": false
+      "cache_age_hours": 12.6,
+      "stale": true
     },
     {
       "source": "static-list#20",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPConnectionPool(host='live4.tdm.com.mo', port=80): Max retries exceeded with url: /ch1/_definst_/ch1.live/playlist.m3u8 (Caused by ConnectTimeoutError(<HTTPConnection(host='live4.tdm.com.mo', port=80) at 0x772fdc7680>, 'Connection to live4.tdm.com.mo timed out. (connect timeout=20)'))",
+      "error": "ConnectionError: HTTPConnectionPool(host='live4.tdm.com.mo', port=80): Max retries exceeded with url: /ch1/_definst_/ch1.live/playlist.m3u8 (Caused by NameResolutionError(\"HTTPConnection(host='live4.tdm.com.mo', port=80): Failed to resolve 'live4.tdm.com.mo' ([Errno 7] No address associated with hostname)\"))",
       "entries": 0,
       "cached": false
     },
@@ -218,14 +215,14 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 12.5,
+      "cache_age_hours": 18.8,
       "stale": true
     },
     {
       "source": "static-list#22",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv4.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='live.fanmingming.com', port=443) at 0x77270742d0>, 'Connection to live.fanmingming.com timed out. (connect timeout=20)'))",
+      "error": "ConnectionError: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv4.m3u (Caused by NameResolutionError(\"HTTPSConnection(host='live.fanmingming.com', port=443): Failed to resolve 'live.fanmingming.com' ([Errno 7] No address associated with hostname)\"))",
       "entries": 0,
       "cached": false
     },
@@ -237,7 +234,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 58.3,
+      "cache_age_hours": 64.7,
       "stale": true
     },
     {
@@ -245,11 +242,11 @@
       "type": "network",
       "ok": true,
       "entries": 1619,
-      "bytes": 396412,
+      "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 6.2,
-      "stale": false
+      "cache_age_hours": 12.6,
+      "stale": true
     },
     {
       "source": "static-list#25",
@@ -259,7 +256,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 12.5,
+      "cache_age_hours": 18.8,
       "stale": true
     },
     {
@@ -270,7 +267,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 12.5,
+      "cache_age_hours": 18.8,
       "stale": true
     },
     {
@@ -281,7 +278,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 58.3,
+      "cache_age_hours": 64.7,
       "stale": true
     },
     {
@@ -289,28 +286,28 @@
       "type": "network",
       "ok": true,
       "entries": 156,
-      "bytes": 32055,
+      "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 6.2,
-      "stale": false
+      "cache_age_hours": 12.6,
+      "stale": true
     },
     {
       "source": "static-list#29",
       "type": "network",
       "ok": true,
       "entries": 18,
-      "bytes": 3736,
+      "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 6.2,
-      "stale": false
+      "cache_age_hours": 12.6,
+      "stale": true
     },
     {
       "source": "static-list#30",
       "type": "network",
       "ok": false,
-      "error": "HTTP 404",
+      "error": "ConnectionError: HTTPSConnectionPool(host='iptv-org.github.io', port=443): Max retries exceeded with url: /iptv/categories/china.m3u (Caused by NameResolutionError(\"HTTPSConnection(host='iptv-org.github.io', port=443): Failed to resolve 'iptv-org.github.io' ([Errno 7] No address associated with hostname)\"))",
       "entries": 0,
       "cached": false
     },
@@ -318,7 +315,7 @@
       "source": "static-list#31",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv6.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='live.fanmingming.com', port=443) at 0x77270760d0>, 'Connection to live.fanmingming.com timed out. (connect timeout=20)'))",
+      "error": "ConnectionError: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv6.m3u (Caused by NameResolutionError(\"HTTPSConnection(host='live.fanmingming.com', port=443): Failed to resolve 'live.fanmingming.com' ([Errno 7] No address associated with hostname)\"))",
       "entries": 0,
       "cached": false
     },
@@ -326,7 +323,7 @@
       "source": "static-list#32",
       "type": "network",
       "ok": false,
-      "error": "ConnectionError: HTTPSConnectionPool(host='raw.githubusercontent.com', port=443): Max retries exceeded with url: /hwansong/ipv6tv/main/iptv6.m3u (Caused by ProtocolError('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer')))",
+      "error": "ConnectionError: HTTPSConnectionPool(host='raw.githubusercontent.com', port=443): Max retries exceeded with url: /hwansong/ipv6tv/main/iptv6.m3u (Caused by NameResolutionError(\"HTTPSConnection(host='raw.githubusercontent.com', port=443): Failed to resolve 'raw.githubusercontent.com' ([Errno 7] No address associated with hostname)\"))",
       "entries": 0,
       "cached": false
     },
@@ -338,7 +335,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 58.3,
+      "cache_age_hours": 64.6,
       "stale": true
     },
     {
@@ -346,44 +343,44 @@
       "type": "network",
       "ok": true,
       "entries": 0,
-      "bytes": 327,
+      "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 6.2,
-      "stale": false
+      "cache_age_hours": 12.6,
+      "stale": true
     },
     {
       "source": "static-4k#35",
       "type": "network",
       "ok": true,
       "entries": 0,
-      "bytes": 327,
+      "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 6.2,
-      "stale": false
+      "cache_age_hours": 12.6,
+      "stale": true
     },
     {
       "source": "zsdc#36",
       "type": "network",
       "ok": true,
       "entries": 155,
-      "bytes": 47983,
+      "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 6.2,
-      "stale": false
+      "cache_age_hours": 12.6,
+      "stale": true
     },
     {
       "source": "zsdc#37",
       "type": "network",
       "ok": true,
       "entries": 155,
-      "bytes": 49270,
+      "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 6.2,
-      "stale": false
+      "cache_age_hours": 12.6,
+      "stale": true
     },
     {
       "source": "local/影视仓带台标EPG.m3u",
@@ -391,9 +388,9 @@
       "ok": true,
       "entries": 8509,
       "bytes": 2132786,
-      "elapsed": 0.0,
-      "cached": true,
-      "cache_age_hours": 6.2,
+      "elapsed": 0.01,
+      "cached": false,
+      "cache_age_hours": 0,
       "stale": false
     }
   ]
