@@ -46,6 +46,17 @@ live:
     # zdbs
     - "https://raw.githubusercontent.com/vbskycn/iptv/refs/heads/master/tv/iptv4.m3u"
     - "https://raw.githubusercontent.com/vbskycn/iptv/refs/heads/master/tv/iptv4.txt"
+    # Gitee c-coming/mytv（个人维护，主力是 mytv2.txt）
+    - "https://gitee.com/c-coming/mytv/raw/master/mytv2.txt"
+    - "https://gitee.com/c-coming/mytv/raw/master/mytv.txt"
+    - "https://gitee.com/c-coming/mytv/raw/master/IPTV.txt"
+    # Gitee scljy/mytv（联通/四川联通源，国内直连）
+    - "https://gitee.com/scljy/mytv/raw/master/%E5%9B%BD%E5%86%85%E7%94%B5%E8%A7%86%E7%9B%B4%E6%92%AD%E6%BA%90.m3u"
+    - "https://gitee.com/scljy/mytv/raw/master/beijing_unicom_new.txt"
+    - "https://gitee.com/scljy/mytv/raw/master/SCLT1018.m3u"
+    - "https://gitee.com/scljy/mytv/raw/master/sc-unicom01.m3u"
+    - "https://gitee.com/scljy/mytv/raw/master/sclt-iptv.m3u8"
+
     # epg.pw / 8.138.7.223（同一站，WAF 拦非浏览器请求）
     - "https://epg.pw/test_channels.m3u"
     - "http://8.138.7.223/live.txt"
