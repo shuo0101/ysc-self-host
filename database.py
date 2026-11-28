@@ -171,3 +171,76 @@ def log_run(**kw):
         kw.get('lc', 0), kw.get('ll', 0), kw.get('dur', 0)))
     c.commit()
     c.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+#  v9 写入层：aggregator._write_db 调用的接口
+#  原先 aggregator 调 db.connect/upsert_sources/upsert_channels，
+#  database.py 里并不存在 → 每轮都 "数据库写入跳过"，
+#  历史、稳定性、运行日志全部丢失。这里补齐。
+# ═════════════════════════════════════════════════════════════════
+
+def connect(cfg: dict = None):
+    """取得数据库连接并确保表已建好（兼容旧代码 db.connect(cfg) 的调用方式）。"""
+    init_db()
+    return _connect()
+
+
+def upsert_sources(conn, sources) -> None:
+    """记录出现过的源（名字+类型），重复不影响。"""
+    for s in sources or []:
+        conn.execute("INSERT OR IGNORE INTO vod_history "
+                     "(url, last_status, last_checked, score) VALUES (?,?,?,0)",
+                     (f"source::{s.get('type','?')}::{s.get('name','?')}",
+                      "source", datetime.now().isoformat()))
+
+
+def upsert_channels(conn, channels) -> None:
+    """本轮入选频道快照：写入 run_log 附带统计，避免表结构变动。"""
+    conn.commit()
+
+
+# ══ v9 写入层：补齐 aggregator 调用但原本不存在的接口 ══
+def connect(cfg=None):
+    """取连接并确保建表（兼容旧调用 db.connect(cfg)）。"""
+    init_db()
+    return _connect()
+
+
+def upsert_sources(conn, sources) -> None:
+    """记录本轮出现过的源名。"""
+    for s in sources or []:
+        conn.execute(
+            "INSERT OR IGNORE INTO vod_history (url, last_status, last_checked, score) "
+            "VALUES (?, 'source', ?, 0)",
+            (f"source::{s.get('type', '?')}::{s.get('name', '?')}",
+             datetime.now().isoformat()))
+
+
+def upsert_channels(conn, channels) -> None:
+    """频道快照接口：统计随 run_log 落库，这里无需额外写表。"""
+    return None
+
+
+def log_run_full(cfg=None, **kw) -> None:
+    """写一条本轮运行记录。"""
+    init_db()
+    log_run(**kw)
+
+
+_LIVE_COLS = ("url", "channel_name", "last_status", "last_delay",
+              "last_resolution", "last_speed", "last_score", "last_checked")
+
+
+def record_live_probe_dict(rec: dict) -> None:
+    """写入一条入选线路的探测记录（供下一轮稳定性/历史排序使用）。"""
+    c = _connect()
+    c.execute(
+        f"INSERT INTO live_history ({','.join(_LIVE_COLS)}) VALUES (?,?,?,?,?,?,?,?)",
+        (rec.get("url"), rec.get("channel") or rec.get("channel_name"),
+         rec.get("status", "ok"), float(rec.get("delay", 0) or 0),
+         int(rec.get("resolution", 0) or 0), float(rec.get("speed", 0) or 0),
+         float(rec.get("score", 0) or 0),
+         rec.get("checked_at") or datetime.now().isoformat()))
+    c.commit()
+    c.close()
