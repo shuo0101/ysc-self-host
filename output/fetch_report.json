@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-28T15:36:32.842244+00:00",
+  "generated_at": "2026-11-28T16:13:01.834903+00:00",
   "dedup": {
     "removed": 3179,
     "deduped": 13422
@@ -11,9 +11,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.25,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -22,9 +22,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.17,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -33,9 +33,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.25,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -44,9 +44,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 296,
-      "elapsed": 0.19,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -55,9 +55,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.27,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -66,9 +66,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.21,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -77,9 +77,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.2,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -88,9 +88,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.19,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -99,9 +99,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 299,
-      "elapsed": 0.18,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -126,7 +126,7 @@
       "ok": true,
       "entries": 62,
       "bytes": 16967,
-      "elapsed": 0.25,
+      "elapsed": 0.37,
       "cached": false,
       "cache_age_hours": 0,
       "stale": false
@@ -137,7 +137,7 @@
       "ok": true,
       "entries": 315,
       "bytes": 62538,
-      "elapsed": 0.27,
+      "elapsed": 0.64,
       "cached": false,
       "cache_age_hours": 0,
       "stale": false
@@ -150,7 +150,7 @@
       "bytes": 64257,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.1,
+      "cache_age_hours": 0.7,
       "stale": false
     },
     {
@@ -159,9 +159,9 @@
       "ok": true,
       "entries": 1285,
       "bytes": 287240,
-      "elapsed": 0.36,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -170,7 +170,7 @@
       "ok": true,
       "entries": 183,
       "bytes": 22580,
-      "elapsed": 0.46,
+      "elapsed": 0.51,
       "cached": false,
       "cache_age_hours": 0,
       "stale": false
@@ -183,7 +183,7 @@
       "bytes": 26468,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.1,
+      "cache_age_hours": 0.7,
       "stale": false
     },
     {
@@ -194,7 +194,7 @@
       "bytes": 24211,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.1,
+      "cache_age_hours": 0.7,
       "stale": false
     },
     {
@@ -203,9 +203,9 @@
       "ok": true,
       "entries": 105,
       "bytes": 10101,
-      "elapsed": 0.24,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -216,7 +216,7 @@
       "bytes": 477693,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.1,
+      "cache_age_hours": 0.7,
       "stale": false
     },
     {
@@ -225,7 +225,7 @@
       "ok": true,
       "entries": 125,
       "bytes": 29851,
-      "elapsed": 0.11,
+      "elapsed": 0.16,
       "cached": false,
       "cache_age_hours": 0,
       "stale": false
@@ -246,7 +246,7 @@
       "bytes": 348,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.1,
+      "cache_age_hours": 0.7,
       "stale": false
     },
     {
@@ -257,7 +257,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 12.0,
+      "cache_age_hours": 12.6,
       "stale": true
     },
     {
@@ -268,7 +268,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 62.4,
+      "cache_age_hours": 63.0,
       "stale": true
     },
     {
@@ -279,7 +279,7 @@
       "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 62.4,
+      "cache_age_hours": 63.0,
       "stale": true
     },
     {
@@ -290,7 +290,7 @@
       "bytes": 851,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.1,
+      "cache_age_hours": 0.7,
       "stale": false
     },
     {
@@ -298,28 +298,28 @@
       "type": "network",
       "ok": true,
       "entries": 157,
-      "bytes": 32255,
+      "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 12.0,
-      "stale": false
+      "cache_age_hours": 12.6,
+      "stale": true
     },
     {
       "source": "static-list#29",
       "type": "network",
       "ok": true,
       "entries": 18,
-      "bytes": 3785,
+      "bytes": 0,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 12.0,
-      "stale": false
+      "cache_age_hours": 12.6,
+      "stale": true
     },
     {
       "source": "static-list#30",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv4.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='live.fanmingming.com', port=443) at 0x7624c36210>, 'Connection to live.fanmingming.com timed out. (connect timeout=20)'))",
+      "error": "ConnectTimeout: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv4.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='live.fanmingming.com', port=443) at 0x74e9ba47d0>, 'Connection to live.fanmingming.com timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -327,7 +327,7 @@
       "source": "static-list#31",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/cctv.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='live.fanmingming.com', port=443) at 0x7624c35f90>, 'Connection to live.fanmingming.com timed out. (connect timeout=20)'))",
+      "error": "ConnectTimeout: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/cctv.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='live.fanmingming.com', port=443) at 0x74e9ba4a50>, 'Connection to live.fanmingming.com timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -339,7 +339,7 @@
       "bytes": 396412,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.1,
+      "cache_age_hours": 0.7,
       "stale": false
     },
     {
@@ -374,7 +374,7 @@
       "bytes": 32255,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.1,
+      "cache_age_hours": 0.7,
       "stale": false
     },
     {
@@ -385,7 +385,7 @@
       "bytes": 3785,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 0.1,
+      "cache_age_hours": 0.7,
       "stale": false
     },
     {
@@ -400,7 +400,7 @@
       "source": "static-list#39",
       "type": "network",
       "ok": false,
-      "error": "ConnectTimeout: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv6.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='live.fanmingming.com', port=443) at 0x7624c37b10>, 'Connection to live.fanmingming.com timed out. (connect timeout=20)'))",
+      "error": "ConnectTimeout: HTTPSConnectionPool(host='live.fanmingming.com', port=443): Max retries exceeded with url: /tv/m3u/ipv6.m3u (Caused by ConnectTimeoutError(<HTTPSConnection(host='live.fanmingming.com', port=443) at 0x74f2a06710>, 'Connection to live.fanmingming.com timed out. (connect timeout=20)'))",
       "entries": 0,
       "cached": false
     },
@@ -426,9 +426,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 327,
-      "elapsed": 0.2,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -437,9 +437,9 @@
       "ok": true,
       "entries": 0,
       "bytes": 327,
-      "elapsed": 0.35,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -448,9 +448,9 @@
       "ok": true,
       "entries": 155,
       "bytes": 48073,
-      "elapsed": 0.75,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -459,9 +459,9 @@
       "ok": true,
       "entries": 155,
       "bytes": 49373,
-      "elapsed": 22.45,
-      "cached": false,
-      "cache_age_hours": 0,
+      "elapsed": 0.0,
+      "cached": true,
+      "cache_age_hours": 0.6,
       "stale": false
     },
     {
@@ -472,7 +472,7 @@
       "bytes": 2132786,
       "elapsed": 0.0,
       "cached": true,
-      "cache_age_hours": 5.7,
+      "cache_age_hours": 6.3,
       "stale": false
     }
   ]
